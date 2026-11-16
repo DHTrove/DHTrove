@@ -18,9 +18,9 @@ searchability. This is **not** a fork of bitmagnet.
 - Six encodings: raw, prefix, dictionary, and each with Zstd.
 - Adaptive block codec selection by *total encoded size*.
 - Crash-recoverable append-only segment files with checksums and segment rotation.
-- RAM infohash index rebuilt from segments on startup; hybrid hashes reference the
-  same record, with no duplicate metadata blob.
-- Exclusive writer lock, idempotent duplicate inserts, logical segment disk quota.
+- Infohash lookup with optional compressed checkpoints, replaying only new segment
+  data at startup; hybrid hashes reference the same record without duplication.
+- Exclusive writer lock, idempotent duplicate inserts, logical data and checkpoint quota.
 - GitHub Actions runs formatting, Clippy, round-trip and crash-recovery tests,
   plus reproducible synthetic compression benchmarks.
 
@@ -31,6 +31,7 @@ searchability. This is **not** a fork of bitmagnet.
 - `crates/dhtrove-bench` — deterministic compression benchmark.
 - `docs/storage-format.md` — block codec prototype.
 - `docs/persistence.md` — disk format, API, recovery and limitations.
+- `docs/checkpoints.md` — index checkpoint format, replay and quota behavior.
 
 ## Run on a development machine
 
@@ -54,7 +55,7 @@ servers are not used for builds or tests.
 
 ## Roadmap
 
-1. Persistent compact infohash index/checkpoints for fast startup.
+1. Profile index checkpoint size, memory usage and cold-start latency at scale.
 2. Tombstones, reclaiming deleted data via safe compaction, physical disk quotas.
 3. Real representative dataset benchmarks and tuning adaptive codecs/block sizes.
 4. DHT discovery, peer metadata retrieval and deduplication.

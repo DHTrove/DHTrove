@@ -2,11 +2,12 @@
 //!
 //! Each independently checksummed segment entry contains a compressed block of
 //! torrent records. Multiple records in a block share compression context.
-//! The v1 / v2 infohash index is rebuilt at startup; it is not yet persisted.
+//! Compact Zstd checkpoints accelerate index rebuilding across restarts.
 //! Segment writes are durable before index entries become visible.
 //!
 //! This crate is an early storage prototype, not a finished search database.
 
+mod checkpoint;
 mod segment;
 
 use dhtrove_storage::{encode_best, Codec, TorrentRecord};
@@ -38,7 +39,7 @@ impl Default for StoreConfig {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum Infohash {
     V1([u8; 20]),
     V2([u8; 32]),
@@ -65,6 +66,8 @@ pub struct StoreStats {
     pub indexed_hashes: usize,
     pub segments: usize,
     pub disk_bytes: u64,
+    pub checkpoint_bytes: u64,
+    pub checkpoint_loaded_on_open: bool,
 }
 
 #[derive(Debug)]
@@ -132,6 +135,8 @@ pub struct Store {
     index: HashMap<Infohash, Location>,
     record_count: u64,
     disk_bytes: u64,
+    checkpoint_bytes: u64,
+    checkpoint_loaded_on_open: bool,
     config: StoreConfig,
     poisoned: bool,
 }
@@ -173,9 +178,20 @@ impl Store {
         let last_id = *segment_ids
             .last()
             .ok_or(StoreError::Invalid("no active segment"))?;
+
+        checkpoint::cleanup_temporary(&root)?;
+        let mut existing_lengths = BTreeMap::new();
+        for &id in &segment_ids {
+            existing_lengths.insert(id, fs::metadata(segment_path(&root, id))?.len());
+        }
+        let loaded = checkpoint::load(&root, &existing_lengths).ok().flatten();
+        let checkpoint_loaded_on_open = loaded.is_some();
+        let (mut index, mut record_count, saved_lengths) = match loaded {
+            Some(snapshot) => (snapshot.index, snapshot.records, snapshot.lengths),
+            None => (HashMap::new(), 0, BTreeMap::new()),
+        };
+
         let mut segments = BTreeMap::new();
-        let mut index = HashMap::new();
-        let mut record_count = 0_u64;
         let mut disk_bytes = 0_u64;
         for id in segment_ids {
             let path = segment_path(&root, id);
@@ -183,12 +199,37 @@ impl Store {
                 .read(true)
                 .write(id == last_id)
                 .open(&path)?;
-            let length = scan_segment(&mut file, id, id == last_id, &mut index, &mut record_count)?;
+            let start_at = saved_lengths
+                .get(&id)
+                .copied()
+                .unwrap_or(SEGMENT_HEADER_BYTES);
+            let length = scan_segment(
+                &mut file,
+                id,
+                id == last_id,
+                start_at,
+                &mut index,
+                &mut record_count,
+            )?;
             disk_bytes = disk_bytes
                 .checked_add(length)
                 .ok_or(StoreError::Invalid("disk usage overflow"))?;
             segments.insert(id, length);
         }
+
+        let checkpoint_bytes = if checkpoint_loaded_on_open {
+            checkpoint::file_size(&root)?
+        } else {
+            match fs::remove_file(root.join("hash-index.zst")) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err.into()),
+            }
+            0
+        };
+        disk_bytes = disk_bytes
+            .checked_add(checkpoint_bytes)
+            .ok_or(StoreError::Invalid("disk usage overflow"))?;
 
         let writer = OpenOptions::new()
             .read(true)
@@ -203,6 +244,8 @@ impl Store {
             index,
             record_count,
             disk_bytes,
+            checkpoint_bytes,
+            checkpoint_loaded_on_open,
             config,
             poisoned: false,
         })
@@ -214,7 +257,29 @@ impl Store {
             indexed_hashes: self.index.len(),
             segments: self.segments.len(),
             disk_bytes: self.disk_bytes,
+            checkpoint_bytes: self.checkpoint_bytes,
+            checkpoint_loaded_on_open: self.checkpoint_loaded_on_open,
         }
+    }
+
+    /// Persist a compact, compressed hash index for faster future startups.
+    /// The existing checkpoint remains intact if the new one fails.
+    pub fn checkpoint(&mut self) -> Result<u64, StoreError> {
+        if self.poisoned {
+            return Err(StoreError::Poisoned);
+        }
+        let segments_bytes = self.disk_bytes - self.checkpoint_bytes;
+        let size = checkpoint::save(
+            &self.root,
+            &self.segments,
+            &self.index,
+            self.record_count,
+            segments_bytes,
+            self.config.max_disk_bytes,
+        )?;
+        self.disk_bytes = segments_bytes + size;
+        self.checkpoint_bytes = size;
+        Ok(size)
     }
 
     pub fn get(&self, hash: &Infohash) -> Result<Option<TorrentRecord>, StoreError> {
