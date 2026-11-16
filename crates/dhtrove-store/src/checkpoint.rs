@@ -188,7 +188,7 @@ pub(crate) fn save(
         // Stable order improves Zstd's ability to compress shared location
         // fields without altering identity or requiring a global dictionary.
         let mut entries: Vec<_> = index.iter().collect();
-        entries.sort_unstable_by(|(ka, _), (kb, _)| ka.cmp(kb));
+        entries.sort_unstable_by_key(|(ka, _)| *ka);
         for (key, location) in entries {
             match key {
                 Infohash::V1(bytes) => {
