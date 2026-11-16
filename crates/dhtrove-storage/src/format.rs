@@ -443,7 +443,10 @@ mod tests {
             }],
         }];
         for codec in Codec::ALL {
-            assert_eq!(decode_block(&encode_block(&rows, codec).unwrap()).unwrap(), rows);
+            assert_eq!(
+                decode_block(&encode_block(&rows, codec).unwrap()).unwrap(),
+                rows
+            );
         }
     }
 
