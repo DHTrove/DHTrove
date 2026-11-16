@@ -84,8 +84,7 @@ fn decode_tombstone(payload: &[u8]) -> Result<Vec<Infohash>, StoreError> {
     if flags == 0 || flags & !3 != 0 {
         return Err(StoreError::Corrupt("invalid tombstone flags".into()));
     }
-    let expected = 6 + if flags & 1 != 0 { 20 } else { 0 }
-        + if flags & 2 != 0 { 32 } else { 0 };
+    let expected = 6 + usize::from(flags & 1 != 0) * 20 + usize::from(flags & 2 != 0) * 32;
     if payload.len() != expected {
         return Err(StoreError::Corrupt("invalid tombstone length".into()));
     }
