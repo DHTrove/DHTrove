@@ -13,14 +13,14 @@ hash-index checkpoint, and deleted hashes can be reinserted later.
 
 ### Why not remove files immediately?
 
-Each compressed block can contain metadata for many torrrents, so rewriting
+Each compressed block can contain metadata for many torrents, so rewriting
 one would be costly and would risk other records during crashes. Tombstones
 preserve query semantics immediately; a later **compaction** operation will
 rewrite only the currently live records into new segments and free obsolete
 ones safely.
 
-Until compaction is implemented, deleting entries *increases* the segment
-files by a small amount and does not reclaim disk space. Quotas apply to
+Deleting entries *increases* the segment files by a small amount until
+`Store::compact()` is invoked to reclaim space. Quotas apply to
 tombstone writes just like normal insertions.
 
 The on-disk frame remains experimental. Older readers that don't recognize
