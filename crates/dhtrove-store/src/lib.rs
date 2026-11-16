@@ -19,8 +19,8 @@ use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use segment::{
-    create_segment, read_block, scan_segment, segment_path, FRAME_HEADER_BYTES,
-    SEGMENT_HEADER_BYTES,
+    create_segment, encode_tombstone, read_block, remove_live, scan_segment, segment_path,
+    FRAME_HEADER_BYTES, SEGMENT_HEADER_BYTES,
 };
 
 /// Logical segment-data limit; filesystem allocation overhead is not included.
@@ -300,6 +300,107 @@ impl Store {
         Ok(Some(record))
     }
 
+    /// Delete a torrent by either of its hashes. A hybrid torrent loses
+    /// both lookup keys atomically. The deletion is durable after sync_data,
+    /// but space is reclaimed only when segments are compacted.
+    pub fn delete(&mut self, hash: &Infohash) -> Result<bool, StoreError> {
+        if self.poisoned {
+            return Err(StoreError::Poisoned);
+        }
+        let Some(record) = self.get(hash)? else {
+            return Ok(false);
+        };
+        let keys = record_keys(&record);
+        let payload = encode_tombstone(&record)?;
+        self.append_payload(&payload)?;
+        if let Err(err) = remove_live(&mut self.index, &mut self.record_count, &keys) {
+            self.poisoned = true;
+            return Err(err);
+        }
+        Ok(true)
+    }
+
+    /// Append and synchronize a generic frame; reused by insert and delete.
+    /// Each frame is independent and CRC32 checked when replayed.
+    fn append_payload(&mut self, payload: &[u8]) -> Result<(Location, u64), StoreError> {
+        let payload_len = u32::try_from(payload.len())
+            .map_err(|_| StoreError::Invalid("frame exceeds u32 length"))?;
+        let needed = FRAME_HEADER_BYTES
+            .checked_add(u64::from(payload_len))
+            .ok_or(StoreError::Invalid("frame length overflow"))?;
+        if needed + SEGMENT_HEADER_BYTES > self.config.max_segment_bytes {
+            return Err(StoreError::Invalid("frame exceeds configured segment size"));
+        }
+
+        let active_len = *self
+            .segments
+            .get(&self.current_segment)
+            .ok_or(StoreError::Invalid("active segment not found"))?;
+        let rollover = active_len
+            .checked_add(needed)
+            .ok_or(StoreError::Invalid("segment length overflow"))?
+            > self.config.max_segment_bytes;
+        let growth = needed + if rollover { SEGMENT_HEADER_BYTES } else { 0 };
+        if let Some(limit) = self.config.max_disk_bytes {
+            if self.disk_bytes > limit || growth > limit - self.disk_bytes {
+                return Err(StoreError::Quota {
+                    used: self.disk_bytes,
+                    needed: growth,
+                    limit,
+                });
+            }
+        }
+
+        if rollover {
+            let new_id = self
+                .current_segment
+                .checked_add(1)
+                .ok_or(StoreError::Invalid("segment id overflow"))?;
+            let file = match create_segment(&self.root, new_id) {
+                Ok(file) => file,
+                Err(err) => {
+                    self.poisoned = true;
+                    return Err(err);
+                }
+            };
+            self.writer = file;
+            self.current_segment = new_id;
+            self.segments.insert(new_id, SEGMENT_HEADER_BYTES);
+            self.disk_bytes += SEGMENT_HEADER_BYTES;
+        }
+
+        let offset = *self
+            .segments
+            .get(&self.current_segment)
+            .ok_or(StoreError::Invalid("active segment not found"))?;
+        let checksum = crc32fast::hash(payload);
+        let write = (|| -> std::io::Result<()> {
+            self.writer.seek(SeekFrom::Start(offset))?;
+            self.writer.write_all(&payload_len.to_le_bytes())?;
+            self.writer.write_all(&checksum.to_le_bytes())?;
+            self.writer.write_all(payload)?;
+            self.writer.sync_data()?;
+            Ok(())
+        })();
+        if let Err(err) = write {
+            self.poisoned = true;
+            return Err(StoreError::Io(err));
+        }
+        self.disk_bytes += needed;
+        *self
+            .segments
+            .get_mut(&self.current_segment)
+            .ok_or(StoreError::Invalid("active segment not found"))? += needed;
+        Ok((
+            Location {
+                segment: self.current_segment,
+                offset,
+                ordinal: 0,
+            },
+            growth,
+        ))
+    }
+
     /// Append one transaction represented by a single independently recoverable
     /// frame. If any hash already exists, skip that torrent (first writer wins).
     ///
@@ -341,72 +442,7 @@ impl Store {
         }
 
         let (codec, encoded) = encode_best(&accepted)?;
-        let payload_len = u32::try_from(encoded.len())
-            .map_err(|_| StoreError::Invalid("encoded block exceeds u32 length"))?;
-        let needed = FRAME_HEADER_BYTES
-            .checked_add(u64::from(payload_len))
-            .ok_or(StoreError::Invalid("frame length overflow"))?;
-
-        if needed + SEGMENT_HEADER_BYTES > self.config.max_segment_bytes {
-            return Err(StoreError::Invalid("block exceeds configured segment size"));
-        }
-
-        let active_len = *self
-            .segments
-            .get(&self.current_segment)
-            .ok_or(StoreError::Invalid("active segment not found"))?;
-        let rollover = active_len + needed > self.config.max_segment_bytes;
-        let growth = needed + if rollover { SEGMENT_HEADER_BYTES } else { 0 };
-        if let Some(limit) = self.config.max_disk_bytes {
-            if self.disk_bytes > limit || growth > limit - self.disk_bytes {
-                return Err(StoreError::Quota {
-                    used: self.disk_bytes,
-                    needed: growth,
-                    limit,
-                });
-            }
-        }
-
-        if rollover {
-            let new_id = self
-                .current_segment
-                .checked_add(1)
-                .ok_or(StoreError::Invalid("segment id overflow"))?;
-            let file = create_segment(&self.root, new_id)?;
-            self.writer = file;
-            self.current_segment = new_id;
-            self.segments.insert(new_id, SEGMENT_HEADER_BYTES);
-            self.disk_bytes += SEGMENT_HEADER_BYTES;
-        }
-
-        let offset = *self
-            .segments
-            .get(&self.current_segment)
-            .ok_or(StoreError::Invalid("active segment not found"))?;
-        let checksum = crc32fast::hash(&encoded);
-        let write = (|| -> std::io::Result<()> {
-            self.writer.seek(SeekFrom::Start(offset))?;
-            self.writer.write_all(&payload_len.to_le_bytes())?;
-            self.writer.write_all(&checksum.to_le_bytes())?;
-            self.writer.write_all(&encoded)?;
-            self.writer.sync_data()?;
-            Ok(())
-        })();
-        if let Err(err) = write {
-            self.poisoned = true;
-            return Err(StoreError::Io(err));
-        }
-
-        self.disk_bytes += needed;
-        *self
-            .segments
-            .get_mut(&self.current_segment)
-            .ok_or(StoreError::Invalid("active segment not found"))? += needed;
-        let location = Location {
-            segment: self.current_segment,
-            offset,
-            ordinal: 0,
-        };
+        let (location, growth) = self.append_payload(&encoded)?;
         for (ordinal, record) in accepted.iter().enumerate() {
             let place = Location {
                 ordinal,

@@ -20,7 +20,8 @@ searchability. This is **not** a fork of bitmagnet.
 - Crash-recoverable append-only segment files with checksums and segment rotation.
 - Infohash lookup with optional compressed checkpoints, replaying only new segment
   data at startup; hybrid hashes reference the same record without duplication.
-- Exclusive writer lock, idempotent duplicate inserts, logical data and checkpoint quota.
+- Exclusive writer lock, idempotent duplicate inserts, durable deletion tombstones,
+  logical data and checkpoint quota.
 - GitHub Actions runs formatting, Clippy, round-trip and crash-recovery tests,
   plus reproducible synthetic compression benchmarks.
 
@@ -32,6 +33,7 @@ searchability. This is **not** a fork of bitmagnet.
 - `docs/storage-format.md` — block codec prototype.
 - `docs/persistence.md` — disk format, API, recovery and limitations.
 - `docs/checkpoints.md` — index checkpoint format, replay and quota behavior.
+- `docs/deletions.md` — tombstone framing, replay and limitations.
 
 ## Run on a development machine
 
@@ -56,7 +58,7 @@ servers are not used for builds or tests.
 ## Roadmap
 
 1. Profile index checkpoint size, memory usage and cold-start latency at scale.
-2. Tombstones, reclaiming deleted data via safe compaction, physical disk quotas.
+2. Safe compaction to reclaim tombstoned data; physical disk quotas.
 3. Real representative dataset benchmarks and tuning adaptive codecs/block sizes.
 4. DHT discovery, peer metadata retrieval and deduplication.
 5. Search, Torznab/API, web interface, Docker and production tooling.
