@@ -1,12 +1,12 @@
 # Append-only persistent segments (experimental)
 
-DHTrove's first persistent storage prototype lives in \`dhtrove-store\`. It is
-not yet a database service. It stores *metadata*, not torrent payload files.
+DHTrove's persistent storage prototype lives in `dhtrove-store`. It stores
+*metadata*, not the torrent payload files, and is not a full database service.
 
 ## Basic example
 
-\`\`\`rust
-use dhtrove_storage::{TorrentRecord, FileEntry};
+```rust
+use dhtrove_storage::{FileEntry, TorrentRecord};
 use dhtrove_store::{Infohash, Store, StoreConfig};
 
 let mut store = Store::open("./dhtrove-data", StoreConfig::default())?;
@@ -17,63 +17,65 @@ let torrent = TorrentRecord {
     files: vec![FileEntry { path: b"Sample/file.mkv".to_vec(), length: 42 }],
 };
 store.append(&[torrent.clone()])?;
+store.checkpoint()?; // optional, speeds up a future startup
 assert_eq!(store.get(&Infohash::V1([1; 20]))?, Some(torrent));
 # Ok::<(), Box<dyn std::error::Error>>(())
-\`\`\`
+```
 
 ## Layout
 
-\`\`\`text
+```text
 dhtrove-data/
   .dhtrove.lock
+  hash-index.zst
   segment-0000000000000000.dhs
   segment-0000000000000001.dhs
   ...
-\`\`\`
+```
 
-Segment header: \`DHTS\`, version byte \`1\`, three zero bytes.
-Each frame: 4-byte little-endian payload length, 4-byte CRC32, followed by a
-full \`DHTB\` codec block. Multiple torrents share a frame, so prefix and token
-compression can operate across torrent boundaries.
+A segment begins with `DHTS`, format version 1 and three zero bytes.
+Each frame contains a four-byte little-endian payload length, four-byte CRC32
+and a self-contained `DHTB` codec block. Multiple torrents may share one frame.
 
-Every segment is immutable after rollover; only the last segment may be
-extended. The active writer holds an exclusive advisory file lock.
+The active writer holds an exclusive advisory file lock. A segment is
+immutable after rollover; only the last segment may grow.
 
 ## Crash recovery
 
-The writer appends the frame and calls \`sync_data\` before exposing its new
-hashes in the in-memory lookup index. On open, frames are scanned and validated.
-If the final frame in the **last segment** is incomplete, it is truncated to the
-last verified position. Full frames with bad checksums or invalid codec data
-produce an error; they are **not silently deleted**. Partial frames in older
-segments also fail rather than being silently discarded.
+The writer calls `sync_data` before exposing newly inserted records.
+At startup, the index is either rebuilt by scanning all segment frames or
+restored from a compact checkpoint, followed by replaying the suffix added
+since the checkpoint was created.
 
-A sync failure poisons the writer; close/reopen to recover. On Unix, new
-segment directory entries are fsynced. Other platforms may offer weaker
-directory durability guarantees.
+If a final frame in the active segment is incomplete, it is truncated to the
+last verified position. Complete corrupt frames and partial frames in sealed
+segments are errors, **not** silently deleted.
+
+A write failure poisons the store handle; close and reopen it for recovery.
+New segment and checkpoint directory entries are fsynced on Unix. Other
+platforms may offer weaker durability guarantees.
+
+See [index checkpoints](checkpoints.md) for their validation and recovery
+semantics. Checkpoints do not revalidate the contents of older segment frames.
 
 ## Disk accounting and quotas
 
-\`max_segment_bytes\` controls segment rotation. \`max_disk_bytes\` enforces an
-exact upper bound on the *logical lengths of segment files* at append time.
-It counts segment headers and frames, but **not** filesystem allocation
-rounding, the lock file, OS metadata, future indexes, or temporary files.
-It should **not** be interpreted as a physical filesystem capacity guarantee.
+`max_segment_bytes` limits each segment's logical length and controls rotation.
+`max_disk_bytes` counts segment lengths plus the compressed checkpoint file.
+Neither measures OS directory metadata, physical filesystem block allocation,
+lock files, or temporary data created while replacing a checkpoint. A checkpoint
+can temporarily require space for both old and new versions.
 
-The current index resides in RAM and is rebuilt by scanning segments on every
-open. It maps both hash versions to one stored record (no duplicate blob).
-Existing hashes are not overwritten; inserting the same torrent is a no-op.
+The RAM index maps both v1/v2 infohash keys to a single record for a hybrid
+torrent. Existing hashes are immutable (first writer wins), so adding a
+known torrent does not create another metadata blob.
 
 ## Deliberate limitations
 
-- No persistent hash index or optimized cold-start yet.
-- No deletions, tombstones, compaction, or reclaiming space yet.
+- RAM HashMap still holds keys; checkpoints accelerate loading, not memory use.
+- No deletion, tombstones or storage compaction yet.
 - No multi-process readers or distributed writers.
-- No cross-block dictionaries.
-- In-memory index uses \`HashMap\`; its RAM usage is not yet optimized.
-- The index is not a full-text search index.
-- Crash consistency relies on operating system / storage durability behavior.
-- Disk quotas don't cover future secondary indexes or transient files.
-
-The next milestone is a persistent, compact index with startup acceleration
-and crash-safe checkpointing, followed by tombstones and compaction.
+- No shared dictionaries across blocks.
+- No full-text search index.
+- No hard physical disk reservations.
+- Current formats are experimental and may change without migration.

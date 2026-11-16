@@ -10,6 +10,7 @@ rust-version.workspace = true
 dhtrove-storage = { path = "../dhtrove-storage" }
 crc32fast = "1.4"
 fs2 = "0.4"
+zstd = "0.13"
 
 [dev-dependencies]
 tempfile = "3"

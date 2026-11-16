@@ -57,6 +57,7 @@ pub(crate) fn scan_segment(
     file: &mut File,
     id: u64,
     is_active: bool,
+    start_at: u64,
     index: &mut HashMap<Infohash, Location>,
     record_count: &mut u64,
 ) -> Result<u64, StoreError> {
@@ -74,7 +75,10 @@ pub(crate) fn scan_segment(
         )));
     }
 
-    let mut pos = SEGMENT_HEADER_BYTES;
+    if start_at < SEGMENT_HEADER_BYTES || start_at > original_len {
+        return Err(StoreError::Corrupt("checkpoint scan offset outside segment".into()));
+    }
+    let mut pos = start_at;
     while pos < original_len {
         let remaining = original_len - pos;
         if remaining < FRAME_HEADER_BYTES {
