@@ -5,7 +5,10 @@
 //! switch makes the new generation visible. A crash before that switch leaves
 //! the old generation authoritative and intact.
 
-use crate::segment::{create_segment, read_block, segment_path, sync_directory, FRAME_HEADER_BYTES, SEGMENT_HEADER_BYTES};
+use crate::segment::{
+    create_segment, read_block, segment_path, sync_directory, FRAME_HEADER_BYTES,
+    SEGMENT_HEADER_BYTES,
+};
 use crate::{record_keys, Infohash, Location, Store, StoreError};
 use dhtrove_storage::{encode_best, TorrentRecord};
 use std::collections::{BTreeMap, HashMap};
@@ -75,9 +78,9 @@ impl Staged {
                 cached_records = read_block(&mut input, place.offset)?;
                 cached_key = Some(frame_key);
             }
-            let record = cached_records
-                .get(place.ordinal)
-                .ok_or_else(|| StoreError::Corrupt("compaction index ordinal out of bounds".into()))?;
+            let record = cached_records.get(place.ordinal).ok_or_else(|| {
+                StoreError::Corrupt("compaction index ordinal out of bounds".into())
+            })?;
             for key in record_keys(record) {
                 if store.index.get(&key) != Some(&place) {
                     return Err(StoreError::Corrupt(
@@ -86,9 +89,7 @@ impl Staged {
                 }
             }
             let cost = estimated_size(record);
-            if !batch.is_empty()
-                && (batch.len() >= 64 || estimate.saturating_add(cost) > target)
-            {
+            if !batch.is_empty() && (batch.len() >= 64 || estimate.saturating_add(cost) > target) {
                 staged.append_batch(&batch)?;
                 batch.clear();
                 estimate = 0;
@@ -123,7 +124,9 @@ impl Staged {
         let frame_len = FRAME_HEADER_BYTES + block.len() as u64;
         if frame_len + SEGMENT_HEADER_BYTES > self.max_segment_bytes {
             if records.len() == 1 {
-                return Err(StoreError::Invalid("record cannot fit in a compacted segment"));
+                return Err(StoreError::Invalid(
+                    "record cannot fit in a compacted segment",
+                ));
             }
             let middle = records.len() / 2;
             self.append_batch(&records[..middle])?;
@@ -156,7 +159,8 @@ impl Staged {
             .map_err(|_| StoreError::Invalid("compaction block too large"))?;
         self.writer.seek(SeekFrom::Start(offset))?;
         self.writer.write_all(&length.to_le_bytes())?;
-        self.writer.write_all(&crc32fast::hash(&block).to_le_bytes())?;
+        self.writer
+            .write_all(&crc32fast::hash(&block).to_le_bytes())?;
         self.writer.write_all(&block)?;
         self.bytes += frame_len;
         *self

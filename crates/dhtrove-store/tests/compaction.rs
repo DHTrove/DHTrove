@@ -149,10 +149,7 @@ fn compaction_requires_temporary_capacity_when_quota_set() {
         max_disk_bytes: Some(consumed),
     };
     let mut store = Store::open(dir.path(), config).unwrap();
-    assert!(matches!(
-        store.compact(),
-        Err(StoreError::Quota { .. })
-    ));
+    assert!(matches!(store.compact(), Err(StoreError::Quota { .. })));
     assert_eq!(store.stats().torrent_records, 5);
     assert!(store.get(&hash(29)).unwrap().is_some());
     drop(store);

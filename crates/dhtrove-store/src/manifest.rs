@@ -6,9 +6,9 @@
 use crate::segment::{parse_segment_name, segment_path, sync_directory};
 use crate::StoreError;
 use std::collections::BTreeSet;
-use std::fs::{self, OpenOptions};
 #[cfg(test)]
 use std::fs::File;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 
@@ -87,7 +87,9 @@ pub(crate) fn load(root: &Path) -> Result<Option<Vec<u64>>, StoreError> {
     }
     for id in &ids {
         if !segment_path(root, *id).is_file() {
-            return Err(StoreError::Corrupt("manifest references missing segment".into()));
+            return Err(StoreError::Corrupt(
+                "manifest references missing segment".into(),
+            ));
         }
     }
     Ok(Some(ids))
@@ -97,11 +99,13 @@ pub(crate) fn load(root: &Path) -> Result<Option<Vec<u64>>, StoreError> {
 /// segments are durable before publication.
 pub(crate) fn publish(root: &Path, ids: &[u64]) -> Result<u64, StoreError> {
     if ids.is_empty() || ids.windows(2).any(|pair| pair[0] >= pair[1]) {
-        return Err(StoreError::Invalid("manifest IDs must be strictly ascending"));
+        return Err(StoreError::Invalid(
+            "manifest IDs must be strictly ascending",
+        ));
     }
     let length = serialized_len(ids.len())?;
-    let count = u32::try_from(ids.len())
-        .map_err(|_| StoreError::Invalid("too many segment IDs"))?;
+    let count =
+        u32::try_from(ids.len()).map_err(|_| StoreError::Invalid("too many segment IDs"))?;
     let mut payload = Vec::with_capacity(length as usize);
     payload.extend_from_slice(MAGIC);
     payload.extend_from_slice(&[VERSION, 0, 0, 0]);
@@ -120,7 +124,10 @@ pub(crate) fn publish(root: &Path, ids: &[u64]) -> Result<u64, StoreError> {
         Err(err) => return Err(err.into()),
     }
     let result = (|| -> std::io::Result<()> {
-        let mut file = OpenOptions::new().write(true).create_new(true).open(&path)?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
         file.write_all(&payload)?;
         file.sync_all()?;
         fs::rename(&path, root.join(NAME))?;

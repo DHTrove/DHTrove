@@ -520,8 +520,7 @@ impl Store {
             self.manifest_bytes
         };
         let manifest_growth = next_manifest_size.saturating_sub(self.manifest_bytes);
-        let growth = needed + if rollover { SEGMENT_HEADER_BYTES } else { 0 }
-            + manifest_growth;
+        let growth = needed + if rollover { SEGMENT_HEADER_BYTES } else { 0 } + manifest_growth;
         if let Some(limit) = self.config.max_disk_bytes {
             if self.disk_bytes > limit || growth > limit - self.disk_bytes {
                 return Err(StoreError::Quota {
