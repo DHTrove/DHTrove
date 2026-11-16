@@ -54,24 +54,32 @@ pub(crate) fn load(
     let mut head = [0u8; 8];
     input.read_exact(&mut head)?;
     if &head[..4] != MAGIC || head[4] != VERSION || head[5..] != [0, 0, 0] {
-        return Err(StoreError::Corrupt("invalid hash-index checkpoint header".into()));
+        return Err(StoreError::Corrupt(
+            "invalid hash-index checkpoint header".into(),
+        ));
     }
 
     let segment_count = read_u32(&mut input)? as usize;
     if segment_count == 0 || segment_count > actual.len() {
-        return Err(StoreError::Corrupt("checkpoint segment count mismatch".into()));
+        return Err(StoreError::Corrupt(
+            "checkpoint segment count mismatch".into(),
+        ));
     }
     let mut lengths = BTreeMap::new();
     for _ in 0..segment_count {
         let id = read_u64(&mut input)?;
         let size = read_u64(&mut input)?;
         if size < 8 || lengths.insert(id, size).is_some() {
-            return Err(StoreError::Corrupt("invalid checkpoint segment manifest".into()));
+            return Err(StoreError::Corrupt(
+            "invalid checkpoint segment manifest".into(),
+        ));
         }
     }
     // Exact ordered prefix. Only the last checkpointed segment can grow.
     if !lengths.keys().eq(actual.keys().take(segment_count)) {
-        return Err(StoreError::Corrupt("checkpoint segments are not a prefix".into()));
+        return Err(StoreError::Corrupt(
+            "checkpoint segments are not a prefix".into(),
+        ));
     }
     let last_id = *lengths
         .last_key_value()
@@ -80,7 +88,9 @@ pub(crate) fn load(
     for (&id, &saved) in &lengths {
         let current = actual[&id];
         if current < saved || (id != last_id && current != saved) {
-            return Err(StoreError::Corrupt("checkpoint segment lengths diverged".into()));
+            return Err(StoreError::Corrupt(
+            "checkpoint segment lengths diverged".into(),
+        ));
         }
     }
 

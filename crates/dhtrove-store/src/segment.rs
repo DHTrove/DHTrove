@@ -76,7 +76,9 @@ pub(crate) fn scan_segment(
     }
 
     if start_at < SEGMENT_HEADER_BYTES || start_at > original_len {
-        return Err(StoreError::Corrupt("checkpoint scan offset outside segment".into()));
+        return Err(StoreError::Corrupt(
+            "checkpoint scan offset outside segment".into(),
+        ));
     }
     let mut pos = start_at;
     while pos < original_len {

@@ -31,14 +31,18 @@ fn checkpoint_is_compressed_and_reloadable() {
     let checkpoint_size;
     {
         let mut store = Store::open(dir.path(), StoreConfig::default()).unwrap();
-        store.append(&(0..500).map(torrent).collect::<Vec<_>>()).unwrap();
+        store
+            .append(&(0..500).map(torrent).collect::<Vec<_>>())
+            .unwrap();
         checkpoint_size = store.checkpoint().unwrap();
         assert!(checkpoint_size > 0);
         assert_eq!(checkpoint_size, store.stats().checkpoint_bytes);
         assert!(!store.stats().checkpoint_loaded_on_open);
     }
     assert_eq!(
-        fs::metadata(dir.path().join("hash-index.zst")).unwrap().len(),
+        fs::metadata(dir.path().join("hash-index.zst"))
+            .unwrap()
+            .len(),
         checkpoint_size
     );
     let store = Store::open(dir.path(), StoreConfig::default()).unwrap();
@@ -135,10 +139,7 @@ fn checkpoint_respects_final_logical_disk_quota() {
         max_disk_bytes: Some(segment_bytes),
     };
     let mut store = Store::open(dir.path(), config).unwrap();
-    assert!(matches!(
-        store.checkpoint(),
-        Err(StoreError::Quota { .. })
-    ));
+    assert!(matches!(store.checkpoint(), Err(StoreError::Quota { .. })));
     assert!(!dir.path().join("hash-index.zst").exists());
     assert!(!dir.path().join("hash-index.zst.tmp").exists());
     assert_eq!(store.stats().disk_bytes, segment_bytes);
