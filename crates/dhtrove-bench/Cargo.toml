@@ -1,0 +1,10 @@
+[package]
+name = "dhtrove-bench"
+version = "0.1.0"
+description = "Reproducible DHTrove storage codec benchmark"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+dhtrove-storage = { path = "../dhtrove-storage" }

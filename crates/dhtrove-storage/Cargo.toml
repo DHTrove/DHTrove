@@ -1,0 +1,11 @@
+[package]
+name = "dhtrove-storage"
+version = "0.1.0"
+description = "Lossless, storage-efficient BitTorrent metadata block codecs"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+zstd = "0.13"
+crc32fast = "1.4"
