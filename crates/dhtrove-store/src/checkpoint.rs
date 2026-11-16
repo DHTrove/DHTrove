@@ -71,8 +71,8 @@ pub(crate) fn load(
         let size = read_u64(&mut input)?;
         if size < 8 || lengths.insert(id, size).is_some() {
             return Err(StoreError::Corrupt(
-            "invalid checkpoint segment manifest".into(),
-        ));
+                "invalid checkpoint segment manifest".into(),
+            ));
         }
     }
     // Exact ordered prefix. Only the last checkpointed segment can grow.
@@ -89,8 +89,8 @@ pub(crate) fn load(
         let current = actual[&id];
         if current < saved || (id != last_id && current != saved) {
             return Err(StoreError::Corrupt(
-            "checkpoint segment lengths diverged".into(),
-        ));
+                "checkpoint segment lengths diverged".into(),
+            ));
         }
     }
 
