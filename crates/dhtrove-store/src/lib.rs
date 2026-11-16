@@ -8,6 +8,8 @@
 //! This crate is an early storage prototype, not a finished search database.
 
 mod checkpoint;
+mod compaction;
+mod manifest;
 mod segment;
 
 use dhtrove_storage::{encode_best, Codec, TorrentRecord};
@@ -68,6 +70,18 @@ pub struct StoreStats {
     pub disk_bytes: u64,
     pub checkpoint_bytes: u64,
     pub checkpoint_loaded_on_open: bool,
+    pub manifest_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompactionOutcome {
+    pub performed: bool,
+    pub old_bytes: u64,
+    pub new_bytes: u64,
+    pub reclaimed_bytes: u64,
+    pub segments_before: usize,
+    pub segments_after: usize,
+    pub records_kept: u64,
 }
 
 #[derive(Debug)]
@@ -137,6 +151,7 @@ pub struct Store {
     disk_bytes: u64,
     checkpoint_bytes: u64,
     checkpoint_loaded_on_open: bool,
+    manifest_bytes: u64,
     config: StoreConfig,
     poisoned: bool,
 }
@@ -158,17 +173,23 @@ impl Store {
             .open(root.join(".dhtrove.lock"))?;
         lock.try_lock_exclusive()?;
 
-        let mut segment_ids = Vec::new();
+        // The active manifest, when present, is authoritative. Ignore
+        // uncommitted segments left by a crashed compaction.
+        manifest::cleanup_staging(&root)?;
+        let manifest_ids = manifest::load(&root)?;
+        let mut discovered = Vec::new();
         for entry in fs::read_dir(&root)? {
             let entry = entry?;
             if !entry.file_type()?.is_file() {
                 continue;
             }
             if let Some(id) = segment::parse_segment_name(&entry.file_name().to_string_lossy()) {
-                segment_ids.push(id);
+                discovered.push(id);
             }
         }
-        segment_ids.sort_unstable();
+        discovered.sort_unstable();
+        let active_manifest = manifest_ids.is_some();
+        let mut segment_ids = manifest_ids.unwrap_or(discovered);
 
         if segment_ids.is_empty() {
             create_segment(&root, 0)?;
@@ -227,14 +248,20 @@ impl Store {
             }
             0
         };
+        let manifest_bytes = manifest::file_size(&root)?;
         disk_bytes = disk_bytes
             .checked_add(checkpoint_bytes)
+            .and_then(|bytes| bytes.checked_add(manifest_bytes))
             .ok_or(StoreError::Invalid("disk usage overflow"))?;
 
         let writer = OpenOptions::new()
             .read(true)
             .write(true)
             .open(segment_path(&root, last_id))?;
+        if active_manifest {
+            let active: Vec<_> = segments.keys().copied().collect();
+            manifest::cleanup_orphans(&root, &active)?;
+        }
         Ok(Self {
             root,
             _lock: lock,
@@ -246,6 +273,7 @@ impl Store {
             disk_bytes,
             checkpoint_bytes,
             checkpoint_loaded_on_open,
+            manifest_bytes,
             config,
             poisoned: false,
         })
@@ -259,6 +287,7 @@ impl Store {
             disk_bytes: self.disk_bytes,
             checkpoint_bytes: self.checkpoint_bytes,
             checkpoint_loaded_on_open: self.checkpoint_loaded_on_open,
+            manifest_bytes: self.manifest_bytes,
         }
     }
 
@@ -298,6 +327,151 @@ impl Store {
             ));
         }
         Ok(Some(record))
+    }
+
+    /// Rewrite only live records into a fresh generation of segments.
+    ///
+    /// The manifest switch is atomic: before publication, old segments stay
+    /// authoritative; after publication, new segments become authoritative.
+    /// Full compaction requires temporary free space roughly equal to the
+    /// compacted live dataset. The configured logical quota applies to the
+    /// peak usage, not just the final compacted size.
+    pub fn compact(&mut self) -> Result<CompactionOutcome, StoreError> {
+        if self.poisoned {
+            return Err(StoreError::Poisoned);
+        }
+        let old_bytes = self.disk_bytes;
+        let segments_before = self.segments.len();
+
+        // Before creating any new filenames in the data directory, publish an
+        // authoritative manifest for existing segments (legacy stores did not
+        // have one). Otherwise interrupted moves could cause duplicate replay.
+        if self.manifest_bytes == 0 {
+            let ids: Vec<u64> = self.segments.keys().copied().collect();
+            let additional = manifest::serialized_len(ids.len())?;
+            if let Some(limit) = self.config.max_disk_bytes {
+                if self.disk_bytes > limit || additional > limit - self.disk_bytes {
+                    return Err(StoreError::Quota {
+                        used: self.disk_bytes,
+                        needed: additional,
+                        limit,
+                    });
+                }
+            }
+            self.manifest_bytes = manifest::publish(&self.root, &ids)?;
+            self.disk_bytes += self.manifest_bytes;
+        }
+
+        manifest::cleanup_staging(&self.root)?;
+        let staged = match compaction::Staged::build(self) {
+            Ok(staged) => staged,
+            Err(err) => {
+                let _ = manifest::cleanup_staging(&self.root);
+                return Err(err);
+            }
+        };
+        let new_ids: Vec<u64> = staged.segments.keys().copied().collect();
+        let old_ids: Vec<u64> = self.segments.keys().copied().collect();
+        let old_segment_bytes: u64 = self.segments.values().copied().sum();
+        if staged.records != self.record_count {
+            let _ = manifest::cleanup_staging(&self.root);
+            return Err(StoreError::Corrupt(
+                "compaction did not preserve live torrent count".into(),
+            ));
+        }
+        // Do not make the database larger merely to rewrite old records.
+        if staged.bytes >= old_segment_bytes {
+            manifest::cleanup_staging(&self.root)?;
+            return Ok(CompactionOutcome {
+                performed: false,
+                old_bytes,
+                new_bytes: self.disk_bytes,
+                reclaimed_bytes: 0,
+                segments_before,
+                segments_after: segments_before,
+                records_kept: self.record_count,
+            });
+        }
+
+        let new_manifest_bytes = manifest::serialized_len(new_ids.len())?;
+        if let Some(limit) = self.config.max_disk_bytes {
+            let peak = self.disk_bytes.saturating_add(staged.bytes);
+            if peak > limit || new_manifest_bytes > limit - peak {
+                manifest::cleanup_staging(&self.root)?;
+                return Err(StoreError::Quota {
+                    used: peak,
+                    needed: new_manifest_bytes,
+                    limit,
+                });
+            }
+        }
+
+        if let Err(err) = staged.move_into(&self.root) {
+            let _ = manifest::cleanup_orphans(&self.root, &old_ids);
+            let _ = manifest::cleanup_staging(&self.root);
+            return Err(err);
+        }
+        let new_last = *new_ids
+            .last()
+            .ok_or(StoreError::Invalid("empty compacted generation"))?;
+        let new_writer = match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(segment_path(&self.root, new_last))
+        {
+            Ok(file) => file,
+            Err(err) => {
+                let _ = manifest::cleanup_orphans(&self.root, &old_ids);
+                let _ = manifest::cleanup_staging(&self.root);
+                return Err(err.into());
+            }
+        };
+
+        // No fallible cleanup before the atomic publication point.
+        if let Err(err) = manifest::publish(&self.root, &new_ids) {
+            // Rename may have completed even when directory fsync fails:
+            // do not touch either generation. Reopening will resolve it.
+            self.poisoned = true;
+            return Err(err);
+        }
+        self.writer = new_writer;
+        self.current_segment = new_last;
+        self.segments = staged.segments;
+        self.index = staged.index;
+        self.record_count = staged.records;
+        self.manifest_bytes = new_manifest_bytes;
+        self.disk_bytes = staged.bytes + new_manifest_bytes + self.checkpoint_bytes;
+
+        // The previous index checkpoint describes old offsets and must be
+        // invalidated; a new one can be explicitly created after compaction.
+        let checkpoint_path = self.root.join("hash-index.zst");
+        match fs::remove_file(checkpoint_path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                self.poisoned = true;
+                return Err(err.into());
+            }
+        }
+        self.disk_bytes -= self.checkpoint_bytes;
+        self.checkpoint_bytes = 0;
+        self.checkpoint_loaded_on_open = false;
+
+        if let Err(err) = manifest::cleanup_orphans(&self.root, &new_ids) {
+            self.poisoned = true;
+            return Err(err);
+        }
+        manifest::cleanup_staging(&self.root)?;
+        let new_bytes = self.disk_bytes;
+        Ok(CompactionOutcome {
+            performed: true,
+            old_bytes,
+            new_bytes,
+            reclaimed_bytes: old_bytes.saturating_sub(new_bytes),
+            segments_before,
+            segments_after: self.segments.len(),
+            records_kept: self.record_count,
+        })
     }
 
     /// Delete a torrent by either of its hashes. A hybrid torrent loses
@@ -340,7 +514,13 @@ impl Store {
             .checked_add(needed)
             .ok_or(StoreError::Invalid("segment length overflow"))?
             > self.config.max_segment_bytes;
-        let growth = needed + if rollover { SEGMENT_HEADER_BYTES } else { 0 };
+        let next_manifest_size = if rollover {
+            manifest::serialized_len(self.segments.len() + 1)?
+        } else {
+            self.manifest_bytes
+        };
+        let manifest_growth = next_manifest_size.saturating_sub(self.manifest_bytes);
+        let growth = needed + if rollover { SEGMENT_HEADER_BYTES } else { 0 } + manifest_growth;
         if let Some(limit) = self.config.max_disk_bytes {
             if self.disk_bytes > limit || growth > limit - self.disk_bytes {
                 return Err(StoreError::Quota {
@@ -363,6 +543,14 @@ impl Store {
                     return Err(err);
                 }
             };
+            let mut ids: Vec<u64> = self.segments.keys().copied().collect();
+            ids.push(new_id);
+            if let Err(err) = manifest::publish(&self.root, &ids) {
+                self.poisoned = true;
+                return Err(err);
+            }
+            self.manifest_bytes = next_manifest_size;
+            self.disk_bytes += manifest_growth;
             self.writer = file;
             self.current_segment = new_id;
             self.segments.insert(new_id, SEGMENT_HEADER_BYTES);
