@@ -31,7 +31,11 @@ impl Dictionary {
                 let count = u64::from(occurrences);
                 let gross = count.saturating_mul(len.saturating_sub(2));
                 let overhead = len + 6;
-                (count >= 3 && gross > overhead).then_some((token, gross - overhead))
+                if count >= 3 && gross > overhead {
+                    Some((token, gross - overhead))
+                } else {
+                    None
+                }
             })
             .collect();
         candidates.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
@@ -115,5 +119,21 @@ fn scan_words(path: &[u8], mut visit: impl FnMut(usize, usize)) {
             pos += 1;
         }
         visit(start, pos);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unique_tokens_do_not_trigger_underflow() {
+        let record = TorrentRecord {
+            v1: Some([7; 20]),
+            v2: None,
+            name: b"NeverRepeatedWord".to_vec(),
+            files: Vec::new(),
+        };
+        assert!(Dictionary::build(&[record]).entries().is_empty());
     }
 }
