@@ -1,0 +1,15 @@
+[package]
+name = "dhtrove-store"
+version = "0.1.0"
+description = "Append-only, crash-recoverable storage for DHTrove torrent metadata"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+dhtrove-storage = { path = "../dhtrove-storage" }
+crc32fast = "1.4"
+fs2 = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
