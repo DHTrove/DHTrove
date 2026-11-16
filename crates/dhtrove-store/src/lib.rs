@@ -17,7 +17,10 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use segment::{create_segment, read_block, scan_segment, segment_path, FRAME_HEADER_BYTES, SEGMENT_HEADER_BYTES};
+use segment::{
+    create_segment, read_block, scan_segment, segment_path, FRAME_HEADER_BYTES,
+    SEGMENT_HEADER_BYTES,
+};
 
 /// Logical segment-data limit; filesystem allocation overhead is not included.
 #[derive(Clone, Copy, Debug)]
@@ -81,7 +84,11 @@ impl fmt::Display for StoreError {
             Self::Codec(err) => write!(f, "storage codec: {err}"),
             Self::Invalid(msg) => write!(f, "invalid store configuration or input: {msg}"),
             Self::Corrupt(msg) => write!(f, "corrupt store: {msg}"),
-            Self::Quota { used, needed, limit } => write!(
+            Self::Quota {
+                used,
+                needed,
+                limit,
+            } => write!(
                 f,
                 "disk quota exceeded: {used} bytes used, {needed} additional, limit {limit}"
             ),
@@ -175,13 +182,7 @@ impl Store {
                 .read(true)
                 .write(id == last_id)
                 .open(&path)?;
-            let length = scan_segment(
-                &mut file,
-                id,
-                id == last_id,
-                &mut index,
-                &mut record_count,
-            )?;
+            let length = scan_segment(&mut file, id, id == last_id, &mut index, &mut record_count)?;
             disk_bytes = disk_bytes
                 .checked_add(length)
                 .ok_or(StoreError::Invalid("disk usage overflow"))?;
@@ -226,7 +227,9 @@ impl Store {
             .nth(location.ordinal)
             .ok_or_else(|| StoreError::Corrupt("index references an invalid record".into()))?;
         if !record_keys(&record).contains(hash) {
-            return Err(StoreError::Corrupt("infohash does not match index reference".into()));
+            return Err(StoreError::Corrupt(
+                "infohash does not match index reference".into(),
+            ));
         }
         Ok(Some(record))
     }
@@ -249,7 +252,10 @@ impl Store {
             if keys.is_empty() {
                 return Err(StoreError::Invalid("torrent has no v1 or v2 hash"));
             }
-            if keys.iter().any(|hash| self.index.contains_key(hash) || pending.contains(hash)) {
+            if keys
+                .iter()
+                .any(|hash| self.index.contains_key(hash) || pending.contains(hash))
+            {
                 skipped += 1;
             } else {
                 for key in keys {
@@ -336,7 +342,10 @@ impl Store {
             ordinal: 0,
         };
         for (ordinal, record) in accepted.iter().enumerate() {
-            let place = Location { ordinal, ..location };
+            let place = Location {
+                ordinal,
+                ..location
+            };
             for key in record_keys(record) {
                 self.index.insert(key, place);
             }

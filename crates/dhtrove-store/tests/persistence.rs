@@ -95,7 +95,10 @@ fn truncates_incomplete_active_tail_without_losing_committed_frames() {
     let store = Store::open(directory.path(), StoreConfig::default()).unwrap();
     assert_eq!(store.stats().torrent_records, 1);
     assert_eq!(store.stats().disk_bytes, committed_len);
-    assert!(store.get(&Infohash::V1(record(1).v1.unwrap())).unwrap().is_some());
+    assert!(store
+        .get(&Infohash::V1(record(1).v1.unwrap()))
+        .unwrap()
+        .is_some());
 }
 
 #[test]

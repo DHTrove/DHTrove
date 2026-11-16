@@ -62,12 +62,16 @@ pub(crate) fn scan_segment(
 ) -> Result<u64, StoreError> {
     let original_len = file.metadata()?.len();
     if original_len < SEGMENT_HEADER_BYTES {
-        return Err(StoreError::Corrupt(format!("segment {id} has a truncated header")));
+        return Err(StoreError::Corrupt(format!(
+            "segment {id} has a truncated header"
+        )));
     }
     let mut header = [0u8; SEGMENT_HEADER_BYTES as usize];
     file.read_exact(&mut header)?;
     if &header[..4] != MAGIC || header[4] != VERSION || header[5..] != [0, 0, 0] {
-        return Err(StoreError::Corrupt(format!("segment {id} has an invalid header")));
+        return Err(StoreError::Corrupt(format!(
+            "segment {id} has an invalid header"
+        )));
     }
 
     let mut pos = SEGMENT_HEADER_BYTES;
@@ -81,8 +85,7 @@ pub(crate) fn scan_segment(
         let mut frame_header = [0u8; FRAME_HEADER_BYTES as usize];
         file.read_exact(&mut frame_header)?;
         let size = u32::from_le_bytes(frame_header[..4].try_into().expect("fixed slice")) as u64;
-        let expected_crc =
-            u32::from_le_bytes(frame_header[4..].try_into().expect("fixed slice"));
+        let expected_crc = u32::from_le_bytes(frame_header[4..].try_into().expect("fixed slice"));
         if size == 0 || size > MAX_BLOCK_BYTES as u64 {
             return Err(StoreError::Corrupt(format!(
                 "segment {id}, offset {pos}: invalid frame length {size}"
@@ -144,10 +147,7 @@ fn recover_tail(
     Ok(valid_end)
 }
 
-pub(crate) fn read_block(
-    file: &mut File,
-    offset: u64,
-) -> Result<Vec<TorrentRecord>, StoreError> {
+pub(crate) fn read_block(file: &mut File, offset: u64) -> Result<Vec<TorrentRecord>, StoreError> {
     file.seek(SeekFrom::Start(offset))?;
     let mut header = [0u8; FRAME_HEADER_BYTES as usize];
     file.read_exact(&mut header)?;
