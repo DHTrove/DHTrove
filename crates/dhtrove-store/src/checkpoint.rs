@@ -4,9 +4,10 @@
 //! A checkpoint covers an exact prefix of each listed segment. On startup we
 //! replay only the committed frames appended after the last checkpoint.
 
+use crate::index::HashIndex;
 use crate::{Infohash, Location, StoreError};
 use dhtrove_storage::MAX_RECORDS;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufWriter, Read, Write};
 use std::path::Path;
@@ -18,7 +19,7 @@ const TEMPORARY: &str = "hash-index.zst.tmp";
 
 pub(crate) struct Snapshot {
     pub(crate) lengths: BTreeMap<u64, u64>,
-    pub(crate) index: HashMap<Infohash, Location>,
+    pub(crate) index: HashIndex,
     pub(crate) records: u64,
 }
 
@@ -100,7 +101,7 @@ pub(crate) fn load(
         return Err(StoreError::Corrupt("invalid checkpoint key count".into()));
     }
 
-    let mut index = HashMap::new();
+    let mut index = HashIndex::new();
     for _ in 0..key_count {
         let mut tag = [0u8; 1];
         input.read_exact(&mut tag)?;
@@ -127,19 +128,14 @@ pub(crate) fn load(
         {
             return Err(StoreError::Corrupt("invalid checkpoint location".into()));
         }
-        if index
-            .insert(
-                key,
-                Location {
-                    segment,
-                    offset,
-                    ordinal,
-                },
-            )
-            .is_some()
-        {
-            return Err(StoreError::Corrupt("duplicate checkpoint infohash".into()));
-        }
+        index.push_sorted(
+            key,
+            Location {
+                segment,
+                offset,
+                ordinal,
+            },
+        )?;
     }
     let mut extra = [0u8; 1];
     if input.read(&mut extra)? != 0 {
@@ -157,7 +153,7 @@ pub(crate) fn load(
 pub(crate) fn save(
     root: &Path,
     segments: &BTreeMap<u64, u64>,
-    index: &HashMap<Infohash, Location>,
+    index: &HashIndex,
     records: u64,
     segments_bytes: u64,
     quota: Option<u64>,
@@ -187,17 +183,15 @@ pub(crate) fn save(
 
         // Stable order improves Zstd's ability to compress shared location
         // fields without altering identity or requiring a global dictionary.
-        let mut entries: Vec<_> = index.iter().collect();
-        entries.sort_unstable_by_key(|(ka, _)| *ka);
-        for (key, location) in entries {
+        for (key, location) in index.iter() {
             match key {
                 Infohash::V1(bytes) => {
                     out.write_all(&[1])?;
-                    out.write_all(bytes)?;
+                    out.write_all(&bytes)?;
                 }
                 Infohash::V2(bytes) => {
                     out.write_all(&[2])?;
-                    out.write_all(bytes)?;
+                    out.write_all(&bytes)?;
                 }
             }
             out.write_all(&location.segment.to_le_bytes())?;

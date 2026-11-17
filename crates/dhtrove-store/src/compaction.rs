@@ -5,13 +5,14 @@
 //! switch makes the new generation visible. A crash before that switch leaves
 //! the old generation authoritative and intact.
 
+use crate::index::HashIndex;
 use crate::segment::{
     create_segment, read_block, segment_path, sync_directory, FRAME_HEADER_BYTES,
     SEGMENT_HEADER_BYTES,
 };
-use crate::{record_keys, Infohash, Location, Store, StoreError};
+use crate::{record_keys, Location, Store, StoreError};
 use dhtrove_storage::{encode_best, TorrentRecord};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
@@ -19,7 +20,7 @@ use std::path::PathBuf;
 pub(crate) struct Staged {
     pub(crate) dir: PathBuf,
     pub(crate) segments: BTreeMap<u64, u64>,
-    pub(crate) index: HashMap<Infohash, Location>,
+    pub(crate) index: HashIndex,
     pub(crate) records: u64,
     pub(crate) bytes: u64,
     writer: File,
@@ -44,7 +45,7 @@ impl Staged {
         let mut staged = Self {
             dir,
             segments: BTreeMap::from([(first, SEGMENT_HEADER_BYTES)]),
-            index: HashMap::with_capacity(store.index.len()),
+            index: HashIndex::new(),
             records: 0,
             bytes: SEGMENT_HEADER_BYTES,
             writer,
@@ -57,7 +58,7 @@ impl Staged {
 
         // Sorting locations groups repeated v1/v2 keys and metadata blocks,
         // so each source frame is decompressed at most once.
-        let mut places: Vec<Location> = store.index.values().copied().collect();
+        let mut places: Vec<Location> = store.index.values().collect();
         places.sort_unstable_by_key(|p| (p.segment, p.offset, p.ordinal));
         places.dedup();
 
@@ -82,7 +83,7 @@ impl Staged {
                 StoreError::Corrupt("compaction index ordinal out of bounds".into())
             })?;
             for key in record_keys(record) {
-                if store.index.get(&key) != Some(&place) {
+                if store.index.get(&key) != Some(place) {
                     return Err(StoreError::Corrupt(
                         "compaction index and source record disagree".into(),
                     ));

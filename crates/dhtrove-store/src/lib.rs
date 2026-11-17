@@ -9,12 +9,14 @@
 
 mod checkpoint;
 mod compaction;
+mod index;
 mod manifest;
 mod segment;
 
 use dhtrove_storage::{encode_best, Codec, TorrentRecord};
 use fs2::FileExt;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use index::HashIndex;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
@@ -71,6 +73,10 @@ pub struct StoreStats {
     pub checkpoint_bytes: u64,
     pub checkpoint_loaded_on_open: bool,
     pub manifest_bytes: u64,
+    /// Exact bytes reserved by frozen infohash arrays (including capacity).
+    pub packed_index_bytes: usize,
+    /// Recent insertions/deletions since the last index repack.
+    pub index_delta_entries: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -146,7 +152,7 @@ pub struct Store {
     writer: File,
     current_segment: u64,
     segments: BTreeMap<u64, u64>,
-    index: HashMap<Infohash, Location>,
+    index: HashIndex,
     record_count: u64,
     disk_bytes: u64,
     checkpoint_bytes: u64,
@@ -209,7 +215,7 @@ impl Store {
         let checkpoint_loaded_on_open = loaded.is_some();
         let (mut index, mut record_count, saved_lengths) = match loaded {
             Some(snapshot) => (snapshot.index, snapshot.records, snapshot.lengths),
-            None => (HashMap::new(), 0, BTreeMap::new()),
+            None => (HashIndex::new(), 0, BTreeMap::new()),
         };
 
         let mut segments = BTreeMap::new();
@@ -237,6 +243,11 @@ impl Store {
                 .ok_or(StoreError::Invalid("disk usage overflow"))?;
             segments.insert(id, length);
         }
+
+        // A full replay is compacted into tightly packed sorted arrays.
+        // A restored checkpoint is already packed; only its replayed tail
+        // needs merging.
+        index.freeze();
 
         let checkpoint_bytes = if checkpoint_loaded_on_open {
             checkpoint::file_size(&root)?
@@ -288,6 +299,8 @@ impl Store {
             checkpoint_bytes: self.checkpoint_bytes,
             checkpoint_loaded_on_open: self.checkpoint_loaded_on_open,
             manifest_bytes: self.manifest_bytes,
+            packed_index_bytes: self.index.packed_bytes(),
+            index_delta_entries: self.index.delta_entries(),
         }
     }
 
@@ -297,6 +310,7 @@ impl Store {
         if self.poisoned {
             return Err(StoreError::Poisoned);
         }
+        self.index.freeze();
         let segments_bytes = self.disk_bytes - self.checkpoint_bytes;
         let size = checkpoint::save(
             &self.root,
@@ -363,13 +377,14 @@ impl Store {
         }
 
         manifest::cleanup_staging(&self.root)?;
-        let staged = match compaction::Staged::build(self) {
+        let mut staged = match compaction::Staged::build(self) {
             Ok(staged) => staged,
             Err(err) => {
                 let _ = manifest::cleanup_staging(&self.root);
                 return Err(err);
             }
         };
+        staged.index.freeze();
         let new_ids: Vec<u64> = staged.segments.keys().copied().collect();
         let old_ids: Vec<u64> = self.segments.keys().copied().collect();
         let old_segment_bytes: u64 = self.segments.values().copied().sum();
