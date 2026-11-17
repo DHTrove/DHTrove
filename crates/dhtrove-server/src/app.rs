@@ -315,6 +315,61 @@ mod tests {
         assert!(!token_matches(b"other!", b"secret"));
     }
     #[tokio::test]
+    async fn api_requires_token_and_reports_stopped() {
+        use axum::body::{to_bytes, Body};
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let service = Service::new(
+            PathBuf::from("/unused"),
+            "test-api-secret-token".into(),
+            Settings::default(),
+        );
+        let routes = router(service);
+        let unauthorized = routes
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let authorized = routes
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/status")
+                    .header(header::AUTHORIZATION, "Bearer test-api-secret-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(authorized.status(), StatusCode::OK);
+        let body = to_bytes(authorized.into_body(), 16_384).await.unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["phase"], "stopped");
+        assert_eq!(value["metrics"]["dht_queries"], 0);
+
+        let response = routes
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/crawler/stop")
+                    .header(header::AUTHORIZATION, "Bearer test-api-secret-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn crawler_is_stopped_by_default() {
         let service = Service::new(
             PathBuf::from("/does-not-exist"),
