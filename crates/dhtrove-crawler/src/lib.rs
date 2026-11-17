@@ -196,7 +196,7 @@ enum FetchResult {
     Failed(Id),
 }
 
-async fn fetch_one(
+struct FetchTask {
     node: DhtNode,
     hash: Id,
     peers: Vec<std::net::SocketAddrV4>,
@@ -205,7 +205,12 @@ async fn fetch_one(
     max_peers: usize,
     peer_id: [u8; 20],
     storage: mpsc::Sender<Command>,
-) -> FetchResult {
+}
+
+async fn fetch_one(task: FetchTask) -> FetchResult {
+    let FetchTask {
+        node, hash, peers, hints, config, max_peers, peer_id, storage,
+    } = task;
     let (tx, rx) = oneshot::channel();
     if storage.send(Command::Exists(hash, tx)).await.is_err() {
         return FetchResult::Failed(hash);
@@ -331,7 +336,16 @@ impl Crawler {
                         let store = storage_tx.clone();
                         let max = self.config.max_peers_per_torrent;
                         let fetch_cfg = self.config.fetch;
-                        fetches.spawn(fetch_one(node, hash, peers, hints, fetch_cfg, max, peer_id, store));
+                        fetches.spawn(fetch_one(FetchTask {
+                            node,
+                            hash,
+                            peers,
+                            hints,
+                            config: fetch_cfg,
+                            max_peers: max,
+                            peer_id,
+                            storage: store,
+                        }));
                     }
                 }
                 Some(result) = fetches.join_next(), if !fetches.is_empty() => {
