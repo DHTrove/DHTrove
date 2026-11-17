@@ -3,7 +3,10 @@
 //! transaction); later self-registrations are regular users.
 
 use argon2::{
-    password_hash::{rand_core::{OsRng, RngCore}, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    password_hash::{
+        rand_core::{OsRng, RngCore},
+        PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
+    },
     Argon2,
 };
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
@@ -42,7 +45,9 @@ pub enum AuthError {
 impl std::fmt::Display for AuthError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Invalid(message) | Self::Conflict(message) | Self::Forbidden(message) => write!(f, "{message}"),
+            Self::Invalid(message) | Self::Conflict(message) | Self::Forbidden(message) => {
+                write!(f, "{message}")
+            }
             Self::Unauthorized => write!(f, "Invalid username or password"),
             Self::RateLimited => write!(f, "Too many sign-in attempts; try again later"),
             Self::Storage(message) => write!(f, "Account storage error: {message}"),
@@ -56,16 +61,24 @@ fn db_error(error: rusqlite::Error) -> AuthError {
 }
 
 fn now() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
 }
 
 fn normalize_username(username: &str) -> Result<String, AuthError> {
     let username = username.trim();
     if !(3..=32).contains(&username.len())
-        || !username.as_bytes().iter().all(|byte| byte.is_ascii_alphanumeric() || b"_-.".contains(byte))
+        || !username
+            .as_bytes()
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_-.".contains(byte))
         || !username.bytes().any(|byte| byte.is_ascii_alphanumeric())
     {
-        return Err(AuthError::Invalid("Username must be 3–32 letters, numbers, dots, dashes or underscores"));
+        return Err(AuthError::Invalid(
+            "Username must be 3–32 letters, numbers, dots, dashes or underscores",
+        ));
     }
     Ok(username.to_ascii_lowercase())
 }
@@ -75,7 +88,9 @@ fn validate_password(password: &str) -> Result<(), AuthError> {
         || password.len() > 256
         || password.chars().any(char::is_control)
     {
-        return Err(AuthError::Invalid("Password must be 12–128 characters without control characters"));
+        return Err(AuthError::Invalid(
+            "Password must be 12–128 characters without control characters",
+        ));
     }
     Ok(())
 }
@@ -89,9 +104,11 @@ fn hash_password(password: &str) -> Result<String, AuthError> {
 }
 
 fn verify_password(password: &str, encoded: &str) -> bool {
-    PasswordHash::new(encoded)
-        .ok()
-        .is_some_and(|hash| Argon2::default().verify_password(password.as_bytes(), &hash).is_ok())
+    PasswordHash::new(encoded).ok().is_some_and(|hash| {
+        Argon2::default()
+            .verify_password(password.as_bytes(), &hash)
+            .is_ok()
+    })
 }
 
 fn session_hash(token: &str) -> Vec<u8> {
@@ -130,7 +147,8 @@ impl Accounts {
             fs::set_permissions(&file, fs::Permissions::from_mode(0o600))
                 .map_err(|error| AuthError::Storage(error.to_string()))?;
         }
-        conn.busy_timeout(Duration::from_secs(5)).map_err(db_error)?;
+        conn.busy_timeout(Duration::from_secs(5))
+            .map_err(db_error)?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA foreign_keys=ON;
@@ -153,7 +171,8 @@ impl Accounts {
                key TEXT PRIMARY KEY,
                value TEXT NOT NULL
              );",
-        ).map_err(db_error)?;
+        )
+        .map_err(db_error)?;
         Ok(Self {
             db: Mutex::new(conn),
             failed_attempts: Mutex::new(HashMap::new()),
@@ -163,16 +182,21 @@ impl Accounts {
 
     pub fn setup_required(&self) -> Result<bool, AuthError> {
         let conn = self.db.lock().expect("account database mutex poisoned");
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0)).map_err(db_error)?;
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
+            .map_err(db_error)?;
         Ok(count == 0)
     }
 
     fn registration_open_conn(conn: &Connection) -> Result<bool, AuthError> {
-        let value: Option<String> = conn.query_row(
-            "SELECT value FROM options WHERE key='registration_enabled'",
-            [],
-            |row| row.get(0),
-        ).optional().map_err(db_error)?;
+        let value: Option<String> = conn
+            .query_row(
+                "SELECT value FROM options WHERE key='registration_enabled'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
         Ok(value.as_deref().unwrap_or("1") == "1")
     }
 
@@ -187,7 +211,8 @@ impl Accounts {
             "INSERT INTO options(key,value) VALUES('registration_enabled', ?1)
              ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             params![if enabled { "1" } else { "0" }],
-        ).map_err(db_error)?;
+        )
+        .map_err(db_error)?;
         Ok(())
     }
 
@@ -198,18 +223,27 @@ impl Accounts {
         // SQLite writer lock while Argon2id performs its expensive work.
         let encrypted = hash_password(password)?;
         let mut conn = self.db.lock().expect("account database mutex poisoned");
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(db_error)?;
-        let count: i64 = tx.query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0)).map_err(db_error)?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error)?;
+        let count: i64 = tx
+            .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
+            .map_err(db_error)?;
         if count != 0 && !Self::registration_open_conn(&tx)? {
-            return Err(AuthError::Forbidden("Registration is disabled by the administrator"));
+            return Err(AuthError::Forbidden(
+                "Registration is disabled by the administrator",
+            ));
         }
         if count >= MAX_ACCOUNTS {
             return Err(AuthError::Forbidden("Account limit reached"));
         }
-        let exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM users WHERE username=?1)", params![username],
-            |row| row.get(0),
-        ).map_err(db_error)?;
+        let exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM users WHERE username=?1)",
+                params![username],
+                |row| row.get(0),
+            )
+            .map_err(db_error)?;
         if exists {
             return Err(AuthError::Conflict("Username is already taken"));
         }
@@ -217,74 +251,118 @@ impl Accounts {
         tx.execute(
             "INSERT INTO users(username,password_hash,is_admin,created_at) VALUES(?1,?2,?3,?4)",
             params![username, encrypted, is_admin, now()],
-        ).map_err(db_error)?;
+        )
+        .map_err(db_error)?;
         let id = tx.last_insert_rowid();
         tx.commit().map_err(db_error)?;
-        Ok(User { id, username, is_admin })
+        Ok(User {
+            id,
+            username,
+            is_admin,
+        })
     }
 
     fn record_failed(&self, username: &str) -> Result<(), AuthError> {
-        let mut failures = self.failed_attempts.lock().expect("failed login mutex poisoned");
+        let mut failures = self
+            .failed_attempts
+            .lock()
+            .expect("failed login mutex poisoned");
         if failures.len() > 2_048 {
             failures.retain(|_, entry| entry.start.elapsed() < RATE_WINDOW);
             if failures.len() > 2_048 {
                 failures.clear();
             }
         }
-        let entry = failures.entry(username.to_owned()).or_insert(FailedAttempts {
-            start: Instant::now(),
-            count: 0,
-        });
+        let entry = failures
+            .entry(username.to_owned())
+            .or_insert(FailedAttempts {
+                start: Instant::now(),
+                count: 0,
+            });
         if entry.start.elapsed() >= RATE_WINDOW {
             entry.start = Instant::now();
             entry.count = 0;
         }
         entry.count = entry.count.saturating_add(1);
-        Err(if entry.count >= MAX_FAILED_ATTEMPTS { AuthError::RateLimited } else { AuthError::Unauthorized })
+        Err(if entry.count >= MAX_FAILED_ATTEMPTS {
+            AuthError::RateLimited
+        } else {
+            AuthError::Unauthorized
+        })
     }
 
     pub fn login(&self, username: &str, password: &str) -> Result<User, AuthError> {
         let username = normalize_username(username).map_err(|_| AuthError::Unauthorized)?;
-        if password.len() > 256 { return Err(AuthError::Unauthorized); }
+        if password.len() > 256 {
+            return Err(AuthError::Unauthorized);
+        }
         {
-            let mut failed = self.failed_attempts.lock().expect("failed login mutex poisoned");
+            let mut failed = self
+                .failed_attempts
+                .lock()
+                .expect("failed login mutex poisoned");
             if let Some(entry) = failed.get(&username) {
                 if entry.start.elapsed() < RATE_WINDOW && entry.count >= MAX_FAILED_ATTEMPTS {
                     return Err(AuthError::RateLimited);
                 }
-                if entry.start.elapsed() >= RATE_WINDOW { failed.remove(&username); }
+                if entry.start.elapsed() >= RATE_WINDOW {
+                    failed.remove(&username);
+                }
             }
         }
         let account: Option<(i64, String, bool, String)> = {
             let conn = self.db.lock().expect("account database mutex poisoned");
             conn.query_row(
                 "SELECT id, username, is_admin, password_hash FROM users WHERE username=?1",
-                params![username], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            ).optional().map_err(db_error)?
+                params![username],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(db_error)?
         };
-        let hash = account.as_ref().map_or(self.dummy_hash.as_str(), |record| record.3.as_str());
+        let hash = account
+            .as_ref()
+            .map_or(self.dummy_hash.as_str(), |record| record.3.as_str());
         if !verify_password(password, hash) {
             return self.record_failed(&username);
         }
         let (id, username, is_admin, _) = account.ok_or(AuthError::Unauthorized)?;
-        self.failed_attempts.lock().expect("failed login mutex poisoned").remove(&username);
-        Ok(User { id, username, is_admin })
+        self.failed_attempts
+            .lock()
+            .expect("failed login mutex poisoned")
+            .remove(&username);
+        Ok(User {
+            id,
+            username,
+            is_admin,
+        })
     }
 
     pub fn create_session(&self, user_id: i64) -> Result<String, AuthError> {
         let token = generate_token();
         let conn = self.db.lock().expect("account database mutex poisoned");
         let created = now();
-        conn.execute("DELETE FROM sessions WHERE expires_at<=?1", params![created]).map_err(db_error)?;
+        conn.execute(
+            "DELETE FROM sessions WHERE expires_at<=?1",
+            params![created],
+        )
+        .map_err(db_error)?;
         conn.execute(
             "INSERT INTO sessions(token_hash,user_id,created_at,expires_at) VALUES(?1,?2,?3,?4)",
-            params![session_hash(&token), user_id, created, created + SESSION_AGE_SECONDS],
-        ).map_err(db_error)?;
+            params![
+                session_hash(&token),
+                user_id,
+                created,
+                created + SESSION_AGE_SECONDS
+            ],
+        )
+        .map_err(db_error)?;
         conn.execute(
             "DELETE FROM sessions WHERE user_id=?1 AND token_hash NOT IN
              (SELECT token_hash FROM sessions WHERE user_id=?1 ORDER BY created_at DESC LIMIT 5)",
             params![user_id],
-        ).map_err(db_error)?;
+        )
+        .map_err(db_error)?;
         Ok(token)
     }
 
@@ -298,22 +376,42 @@ impl Accounts {
              JOIN users u ON u.id=s.user_id
              WHERE s.token_hash=?1 AND s.expires_at>?2",
             params![session_hash(token), now()],
-            |row| Ok(User { id: row.get(0)?, username: row.get(1)?, is_admin: row.get(2)? }),
-        ).optional().map_err(db_error)
+            |row| {
+                Ok(User {
+                    id: row.get(0)?,
+                    username: row.get(1)?,
+                    is_admin: row.get(2)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(db_error)
     }
 
     pub fn revoke_session(&self, token: &str) -> Result<(), AuthError> {
         let conn = self.db.lock().expect("account database mutex poisoned");
-        conn.execute("DELETE FROM sessions WHERE token_hash=?1", params![session_hash(token)]).map_err(db_error)?;
+        conn.execute(
+            "DELETE FROM sessions WHERE token_hash=?1",
+            params![session_hash(token)],
+        )
+        .map_err(db_error)?;
         Ok(())
     }
 
     pub fn users(&self) -> Result<Vec<User>, AuthError> {
         let conn = self.db.lock().expect("account database mutex poisoned");
-        let mut query = conn.prepare("SELECT id,username,is_admin FROM users ORDER BY id").map_err(db_error)?;
-        let rows = query.query_map([], |row| Ok(User {
-            id: row.get(0)?, username: row.get(1)?, is_admin: row.get(2)?,
-        })).map_err(db_error)?;
+        let mut query = conn
+            .prepare("SELECT id,username,is_admin FROM users ORDER BY id")
+            .map_err(db_error)?;
+        let rows = query
+            .query_map([], |row| {
+                Ok(User {
+                    id: row.get(0)?,
+                    username: row.get(1)?,
+                    is_admin: row.get(2)?,
+                })
+            })
+            .map_err(db_error)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
     }
 }
@@ -333,11 +431,19 @@ mod tests {
             assert!(first.is_admin);
             assert_eq!(first.username, "admin");
             assert!(!accounts.setup_required().unwrap());
-            let second = accounts.register("viewer", "viewer-valid-password").unwrap();
+            let second = accounts
+                .register("viewer", "viewer-valid-password")
+                .unwrap();
             assert!(!second.is_admin);
-            assert!(matches!(accounts.register("ADMIN", "another-valid-password"), Err(AuthError::Conflict(_))));
+            assert!(matches!(
+                accounts.register("ADMIN", "another-valid-password"),
+                Err(AuthError::Conflict(_))
+            ));
             assert!(accounts.login("VIEWER", "bad-password-here").is_err());
-            assert_eq!(accounts.login("viewer", "viewer-valid-password").unwrap(), second);
+            assert_eq!(
+                accounts.login("viewer", "viewer-valid-password").unwrap(),
+                second
+            );
             (accounts.create_session(first.id).unwrap(), first.id)
         };
         let accounts = Accounts::open(dir.path()).unwrap();
@@ -354,8 +460,14 @@ mod tests {
         let admin = accounts.register("owner", "owner-valid-password").unwrap();
         accounts.set_registration(false).unwrap();
         assert!(!accounts.registration_open().unwrap());
-        assert!(matches!(accounts.register("new-user", "valid-new-password"), Err(AuthError::Forbidden(_))));
-        assert_eq!(accounts.login("owner", "owner-valid-password").unwrap(), admin);
+        assert!(matches!(
+            accounts.register("new-user", "valid-new-password"),
+            Err(AuthError::Forbidden(_))
+        ));
+        assert_eq!(
+            accounts.login("owner", "owner-valid-password").unwrap(),
+            admin
+        );
         drop(accounts);
         let reopened = Accounts::open(dir.path()).unwrap();
         assert!(!reopened.registration_open().unwrap());

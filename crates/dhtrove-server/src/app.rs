@@ -1,4 +1,7 @@
-use crate::{auth::{Accounts, AuthError, User}, config::{self, Settings}};
+use crate::{
+    auth::{Accounts, AuthError, User},
+    config::{self, Settings},
+};
 use axum::{
     extract::{DefaultBodyLimit, Path as AxumPath, Request, State},
     http::{header, HeaderValue, Method, StatusCode},
@@ -218,7 +221,10 @@ impl From<AuthError> for ApiError {
             AuthError::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             AuthError::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
-        Self { status, message: error.to_string() }
+        Self {
+            status,
+            message: error.to_string(),
+        }
     }
 }
 impl IntoResponse for ApiError {
@@ -268,8 +274,11 @@ where
 }
 
 fn require_admin(user: &User) -> Result<(), ApiError> {
-    if user.is_admin { Ok(()) }
-    else { Err(ApiError::forbidden("Administrator access required")) }
+    if user.is_admin {
+        Ok(())
+    } else {
+        Err(ApiError::forbidden("Administrator access required"))
+    }
 }
 
 async fn auth(
@@ -280,7 +289,10 @@ async fn auth(
     // SameSite=Strict and a custom header protect state-changing requests
     // from cross-site form posts; browsers preflight cross-origin JS.
     if !matches!(*request.method(), Method::GET | Method::HEAD)
-        && request.headers().get("x-dhtrove-request").is_none_or(|value| value != "1")
+        && request
+            .headers()
+            .get("x-dhtrove-request")
+            .is_none_or(|value| value != "1")
     {
         return Err(StatusCode::FORBIDDEN);
     }
@@ -312,9 +324,9 @@ struct RegistrationOption {
 
 async fn setup(State(service): State<Arc<Service>>) -> Result<Json<Value>, ApiError> {
     let accounts = service.accounts.clone();
-    let (needs_setup, registration_enabled) = account_operation(move || {
-        Ok((accounts.setup_required()?, accounts.registration_open()?))
-    }).await?;
+    let (needs_setup, registration_enabled) =
+        account_operation(move || Ok((accounts.setup_required()?, accounts.registration_open()?)))
+            .await?;
     Ok(Json(json!({
         "needs_setup": needs_setup,
         "registration_enabled": registration_enabled
@@ -330,10 +342,16 @@ async fn register(
         let user = accounts.register(&body.username, &body.password)?;
         let token = accounts.create_session(user.id)?;
         Ok((user, token))
-    }).await?;
+    })
+    .await?;
     let mut response = (StatusCode::CREATED, Json(json!({"user": user}))).into_response();
-    response.headers_mut().insert(header::SET_COOKIE, session_cookie(&token, service.secure_cookies));
-    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        session_cookie(&token, service.secure_cookies),
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
 }
 
@@ -346,10 +364,16 @@ async fn login(
         let user = accounts.login(&body.username, &body.password)?;
         let token = accounts.create_session(user.id)?;
         Ok((user, token))
-    }).await?;
+    })
+    .await?;
     let mut response = Json(json!({"user": user})).into_response();
-    response.headers_mut().insert(header::SET_COOKIE, session_cookie(&token, service.secure_cookies));
-    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        session_cookie(&token, service.secure_cookies),
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
 }
 
@@ -367,8 +391,12 @@ async fn logout(
         account_operation(move || accounts.revoke_session(&token)).await?;
     }
     let mut response = Json(json!({"ok": true})).into_response();
-    response.headers_mut().insert(header::SET_COOKIE, cleared_cookie(service.secure_cookies));
-    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert(header::SET_COOKIE, cleared_cookie(service.secure_cookies));
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
 }
 
@@ -505,7 +533,13 @@ mod tests {
         Service::new(dir.to_path_buf(), accounts, false, Settings::default())
     }
 
-    async fn call(router: Router, method: &str, uri: &str, body: Value, cookie: Option<&str>) -> Response {
+    async fn call(
+        router: Router,
+        method: &str,
+        uri: &str,
+        body: Value,
+        cookie: Option<&str>,
+    ) -> Response {
         let mut request = Request::builder()
             .method(method)
             .uri(uri)
@@ -514,7 +548,10 @@ mod tests {
         if let Some(value) = cookie {
             request = request.header(header::COOKIE, value);
         }
-        router.oneshot(request.body(Body::from(body.to_string())).unwrap()).await.unwrap()
+        router
+            .oneshot(request.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap()
     }
 
     async fn json(response: Response) -> Value {
@@ -524,7 +561,12 @@ mod tests {
 
     fn cookie(response: &Response) -> String {
         response.headers()[header::SET_COOKIE]
-            .to_str().unwrap().split(';').next().unwrap().to_owned()
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned()
     }
 
     #[tokio::test]
@@ -537,39 +579,105 @@ mod tests {
         let forbidden = call(routes.clone(), "GET", "/api/status", json!({}), None).await;
         assert_eq!(forbidden.status(), StatusCode::UNAUTHORIZED);
 
-        let first = call(routes.clone(), "POST", "/api/auth/register",
-            json!({"username":"Owner", "password":"a-strong-admin-password"}), None).await;
+        let first = call(
+            routes.clone(),
+            "POST",
+            "/api/auth/register",
+            json!({"username":"Owner", "password":"a-strong-admin-password"}),
+            None,
+        )
+        .await;
         assert_eq!(first.status(), StatusCode::CREATED);
         let admin_cookie = cookie(&first);
         assert_eq!(json(first).await["user"]["is_admin"], true);
 
-        let second = call(routes.clone(), "POST", "/api/auth/register",
-            json!({"username":"viewer", "password":"a-strong-user-password"}), None).await;
+        let second = call(
+            routes.clone(),
+            "POST",
+            "/api/auth/register",
+            json!({"username":"viewer", "password":"a-strong-user-password"}),
+            None,
+        )
+        .await;
         assert_eq!(second.status(), StatusCode::CREATED);
         let viewer_cookie = cookie(&second);
         assert_eq!(json(second).await["user"]["is_admin"], false);
 
-        let member = call(routes.clone(), "POST", "/api/crawler/start", json!({}), Some(&viewer_cookie)).await;
+        let member = call(
+            routes.clone(),
+            "POST",
+            "/api/crawler/start",
+            json!({}),
+            Some(&viewer_cookie),
+        )
+        .await;
         assert_eq!(member.status(), StatusCode::FORBIDDEN);
-        let member = call(routes.clone(), "PUT", "/api/settings", json!({}), Some(&viewer_cookie)).await;
+        let member = call(
+            routes.clone(),
+            "PUT",
+            "/api/settings",
+            json!({}),
+            Some(&viewer_cookie),
+        )
+        .await;
         assert_eq!(member.status(), StatusCode::FORBIDDEN);
 
-        let admin = call(routes.clone(), "GET", "/api/admin/users", json!({}), Some(&admin_cookie)).await;
+        let admin = call(
+            routes.clone(),
+            "GET",
+            "/api/admin/users",
+            json!({}),
+            Some(&admin_cookie),
+        )
+        .await;
         assert_eq!(admin.status(), StatusCode::OK);
         assert_eq!(json(admin).await["users"].as_array().unwrap().len(), 2);
 
-        let disable = call(routes.clone(), "POST", "/api/admin/registration",
-            json!({"enabled":false}), Some(&admin_cookie)).await;
+        let disable = call(
+            routes.clone(),
+            "POST",
+            "/api/admin/registration",
+            json!({"enabled":false}),
+            Some(&admin_cookie),
+        )
+        .await;
         assert_eq!(disable.status(), StatusCode::OK);
-        let third = call(routes.clone(), "POST", "/api/auth/register",
-            json!({"username":"third", "password":"a-strong-user-password"}), None).await;
+        let third = call(
+            routes.clone(),
+            "POST",
+            "/api/auth/register",
+            json!({"username":"third", "password":"a-strong-user-password"}),
+            None,
+        )
+        .await;
         assert_eq!(third.status(), StatusCode::FORBIDDEN);
 
-        let stopped = call(routes.clone(), "GET", "/api/status", json!({}), Some(&viewer_cookie)).await;
+        let stopped = call(
+            routes.clone(),
+            "GET",
+            "/api/status",
+            json!({}),
+            Some(&viewer_cookie),
+        )
+        .await;
         assert_eq!(json(stopped).await["phase"], "stopped");
-        let logout = call(routes.clone(), "POST", "/api/auth/logout", json!({}), Some(&viewer_cookie)).await;
+        let logout = call(
+            routes.clone(),
+            "POST",
+            "/api/auth/logout",
+            json!({}),
+            Some(&viewer_cookie),
+        )
+        .await;
         assert_eq!(logout.status(), StatusCode::OK);
-        let invalid = call(routes, "GET", "/api/status", json!({}), Some(&viewer_cookie)).await;
+        let invalid = call(
+            routes,
+            "GET",
+            "/api/status",
+            json!({}),
+            Some(&viewer_cookie),
+        )
+        .await;
         assert_eq!(invalid.status(), StatusCode::UNAUTHORIZED);
     }
 
@@ -577,14 +685,32 @@ mod tests {
     async fn login_and_cookies_survive_restart() {
         let dir = tempdir().unwrap();
         let routes = router(service(dir.path()));
-        let first = call(routes.clone(), "POST", "/api/auth/register",
-            json!({"username":"owner", "password":"very-long-password"}), None).await;
+        let first = call(
+            routes.clone(),
+            "POST",
+            "/api/auth/register",
+            json!({"username":"owner", "password":"very-long-password"}),
+            None,
+        )
+        .await;
         assert_eq!(first.status(), StatusCode::CREATED);
-        let bad = call(routes.clone(), "POST", "/api/auth/login",
-            json!({"username":"owner", "password":"incorrect-password"}), None).await;
+        let bad = call(
+            routes.clone(),
+            "POST",
+            "/api/auth/login",
+            json!({"username":"owner", "password":"incorrect-password"}),
+            None,
+        )
+        .await;
         assert_eq!(bad.status(), StatusCode::UNAUTHORIZED);
-        let good = call(routes, "POST", "/api/auth/login",
-            json!({"username":"owner", "password":"very-long-password"}), None).await;
+        let good = call(
+            routes,
+            "POST",
+            "/api/auth/login",
+            json!({"username":"owner", "password":"very-long-password"}),
+            None,
+        )
+        .await;
         assert_eq!(good.status(), StatusCode::OK);
         let session = cookie(&good);
         let restarted = router(service(dir.path()));
@@ -596,11 +722,19 @@ mod tests {
     async fn mutating_requests_require_custom_header() {
         let dir = tempdir().unwrap();
         let routes = router(service(dir.path()));
-        let response = routes.oneshot(
-            Request::builder().method("POST").uri("/api/auth/login")
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"username":"foo","password":"abcdefgh123456"}"#)).unwrap()
-        ).await.unwrap();
+        let response = routes
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/auth/login")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"username":"foo","password":"abcdefgh123456"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         // Login is a public JSON-only endpoint; no cookie or admin controls.
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
