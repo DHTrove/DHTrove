@@ -10,7 +10,7 @@ use crate::segment::{
     create_segment, read_block, segment_path, sync_directory, FRAME_HEADER_BYTES,
     SEGMENT_HEADER_BYTES,
 };
-use crate::{record_keys, Infohash, Location, Store, StoreError};
+use crate::{record_keys, Location, Store, StoreError};
 use dhtrove_storage::{encode_best, TorrentRecord};
 use std::collections::BTreeMap;
 use std::fs::{self, File};
