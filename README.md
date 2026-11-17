@@ -18,8 +18,8 @@ searchability. This is **not** a fork of bitmagnet.
 - Six encodings: raw, prefix, dictionary, and each with Zstd.
 - Adaptive block codec selection by *total encoded size*.
 - Crash-recoverable append-only segment files with checksums and segment rotation.
-- Infohash lookup with optional compressed checkpoints, replaying only new segment
-  data at startup; hybrid hashes reference the same record without duplication.
+- Packed, sorted infohash lookup (40-byte v1 / 52-byte v2 entries) with a mutable
+  overlay and Zstd checkpoints; hybrid hashes share the same torrent metadata.
 - Exclusive writer lock, durable tombstone deletion, and crash-safe segment
   compaction with an atomic active-segment manifest.
 - GitHub Actions runs formatting, Clippy, round-trip and crash-recovery tests,
@@ -35,6 +35,7 @@ searchability. This is **not** a fork of bitmagnet.
 - `docs/checkpoints.md` — index checkpoint format, replay and quota behavior.
 - `docs/deletions.md` — tombstone framing and replay.
 - `docs/compaction.md` — atomic generation switching and space reclamation.
+- `docs/packed-index.md` — compact in-memory infohash index and tradeoffs.
 
 ## Run on a development machine
 
@@ -58,7 +59,7 @@ servers are not used for builds or tests.
 
 ## Roadmap
 
-1. Profile index checkpoint size, memory usage and cold-start latency at scale.
+1. Benchmark total index RAM, search latency and checkpoint load time on real data.
 2. Validate compaction at scale and improve memory efficiency; physical disk quotas.
 3. Real representative dataset benchmarks and tuning adaptive codecs/block sizes.
 4. DHT discovery, peer metadata retrieval and deduplication.

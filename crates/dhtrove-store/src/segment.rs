@@ -1,9 +1,9 @@
 //! Segment framing, append-only tombstones, recovery and corruption checks.
 
+use crate::index::HashIndex;
 use crate::{record_keys, Infohash, Location, StoreError};
 use crc32fast::hash;
 use dhtrove_storage::{decode_block, TorrentRecord, MAX_BLOCK_BYTES};
-use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -106,11 +106,11 @@ fn decode_tombstone(payload: &[u8]) -> Result<Vec<Infohash>, StoreError> {
 
 /// A committed tombstone must point to a single existing logical record.
 pub(crate) fn remove_live(
-    index: &mut HashMap<Infohash, Location>,
+    index: &mut HashIndex,
     record_count: &mut u64,
     keys: &[Infohash],
 ) -> Result<(), StoreError> {
-    let mut places = keys.iter().map(|key| index.get(key).copied());
+    let mut places = keys.iter().map(|key| index.get(key));
     let first = places
         .next()
         .flatten()
@@ -136,7 +136,7 @@ pub(crate) fn scan_segment(
     id: u64,
     is_active: bool,
     start_at: u64,
-    index: &mut HashMap<Infohash, Location>,
+    index: &mut HashIndex,
     record_count: &mut u64,
 ) -> Result<u64, StoreError> {
     let original_len = file.metadata()?.len();
