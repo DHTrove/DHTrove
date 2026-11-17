@@ -5,11 +5,11 @@
 //! switch makes the new generation visible. A crash before that switch leaves
 //! the old generation authoritative and intact.
 
+use crate::index::HashIndex;
 use crate::segment::{
     create_segment, read_block, segment_path, sync_directory, FRAME_HEADER_BYTES,
     SEGMENT_HEADER_BYTES,
 };
-use crate::index::HashIndex;
 use crate::{record_keys, Infohash, Location, Store, StoreError};
 use dhtrove_storage::{encode_best, TorrentRecord};
 use std::collections::BTreeMap;

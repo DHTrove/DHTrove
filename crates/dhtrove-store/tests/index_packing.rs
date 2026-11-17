@@ -44,7 +44,10 @@ fn checkpoint_restores_packed_index_and_replays_mutations() {
         assert_eq!(store.stats().index_delta_entries, 0);
         for i in [0, 3, 17, 511, 1_024, 1_999] {
             let row = record(i);
-            assert_eq!(store.get(&Infohash::V1(row.v1.unwrap())).unwrap(), Some(row.clone()));
+            assert_eq!(
+                store.get(&Infohash::V1(row.v1.unwrap())).unwrap(),
+                Some(row.clone())
+            );
             if let Some(hash) = row.v2 {
                 assert_eq!(store.get(&Infohash::V2(hash)).unwrap(), Some(row));
             }
@@ -70,7 +73,10 @@ fn checkpoint_restores_packed_index_and_replays_mutations() {
     }
     for i in [2_001, 2_002] {
         let row = record(i);
-        assert_eq!(store.get(&Infohash::V1(row.v1.unwrap())).unwrap(), Some(row));
+        assert_eq!(
+            store.get(&Infohash::V1(row.v1.unwrap())).unwrap(),
+            Some(row)
+        );
     }
 }
 

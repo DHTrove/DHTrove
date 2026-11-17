@@ -131,7 +131,9 @@ impl HashIndex {
         location: Location,
     ) -> Result<(), StoreError> {
         if !self.delta.is_empty() {
-            return Err(StoreError::Corrupt("cannot load frozen index with overlay".into()));
+            return Err(StoreError::Corrupt(
+                "cannot load frozen index with overlay".into(),
+            ));
         }
         match key {
             Infohash::V1(hash) => {
@@ -141,7 +143,9 @@ impl HashIndex {
                         .last()
                         .is_some_and(|last| last[..20].cmp(hash.as_slice()).is_ge())
                 {
-                    return Err(StoreError::Corrupt("unsorted or repeated v1 infohash".into()));
+                    return Err(StoreError::Corrupt(
+                        "unsorted or repeated v1 infohash".into(),
+                    ));
                 }
                 self.v1.push(pack_v1(hash, location));
             }
@@ -151,7 +155,9 @@ impl HashIndex {
                     .last()
                     .is_some_and(|last| last[..32].cmp(hash.as_slice()).is_ge())
                 {
-                    return Err(StoreError::Corrupt("unsorted or repeated v2 infohash".into()));
+                    return Err(StoreError::Corrupt(
+                        "unsorted or repeated v2 infohash".into(),
+                    ));
                 }
                 self.v2.push(pack_v2(hash, location));
             }
@@ -178,8 +184,8 @@ fn pack_v2(hash: [u8; 32], location: Location) -> [u8; V2_SIZE] {
 fn write_location(out: &mut [u8], location: Location) {
     out[..8].copy_from_slice(&location.segment.to_le_bytes());
     out[8..16].copy_from_slice(&location.offset.to_le_bytes());
-    let ordinal = u32::try_from(location.ordinal)
-        .expect("ordinal bounded by the block codec record limit");
+    let ordinal =
+        u32::try_from(location.ordinal).expect("ordinal bounded by the block codec record limit");
     out[16..20].copy_from_slice(&ordinal.to_le_bytes());
 }
 
