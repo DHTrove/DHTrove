@@ -722,21 +722,42 @@ mod tests {
     async fn mutating_requests_require_custom_header() {
         let dir = tempdir().unwrap();
         let routes = router(service(dir.path()));
+        let first = call(
+            routes.clone(),
+            "POST",
+            "/api/auth/register",
+            json!({"username":"owner","password":"very-long-password"}),
+            None,
+        )
+        .await;
+        let admin_cookie = cookie(&first);
+        assert_eq!(first.status(), StatusCode::CREATED);
+
+        // A cross-site form POST cannot set X-DHTrove-Request; even a valid
+        // session cookie is not sufficient to authorize a mutation.
         let response = routes
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/auth/login")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        r#"{"username":"foo","password":"abcdefgh123456"}"#,
-                    ))
+                    .uri("/api/crawler/stop")
+                    .header(header::COOKIE, admin_cookie.as_str())
+                    .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
-        // Login is a public JSON-only endpoint; no cookie or admin controls.
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let allowed = call(
+            routes,
+            "POST",
+            "/api/crawler/stop",
+            json!({}),
+            Some(&admin_cookie),
+        )
+        .await;
+        assert_eq!(allowed.status(), StatusCode::OK);
     }
 
     #[tokio::test]
