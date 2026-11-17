@@ -107,11 +107,17 @@ impl HashIndex {
     /// this during maintenance rather than for every incoming torrent.
     pub(crate) fn freeze(&mut self) {
         if self.delta.is_empty() {
+            self.v1.shrink_to_fit();
+            self.v2.shrink_to_fit();
             return;
         }
         let mut rows: Vec<_> = self.iter().collect();
         rows.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-        let (mut v1, mut v2) = (Vec::new(), Vec::new());
+        let n_v1 = rows.iter().filter(|(key, _)| matches!(key, Infohash::V1(_))).count();
+        let (mut v1, mut v2) = (
+            Vec::with_capacity(n_v1),
+            Vec::with_capacity(rows.len() - n_v1),
+        );
         for (key, location) in rows {
             match key {
                 Infohash::V1(hash) => v1.push(pack_v1(hash, location)),
