@@ -12,21 +12,35 @@ pub struct NodeContact {
 }
 
 pub enum Message<'a> {
-    Query { transaction: &'a [u8], name: &'a [u8], args: &'a Value<'a> },
-    Response { transaction: &'a [u8], data: &'a Value<'a> },
-    Error { transaction: &'a [u8] },
+    Query {
+        transaction: &'a [u8],
+        name: &'a [u8],
+        args: &'a Value<'a>,
+    },
+    Response {
+        transaction: &'a [u8],
+        data: &'a Value<'a>,
+    },
+    Error {
+        transaction: &'a [u8],
+    },
 }
 
 pub fn parse<'a>(value: &'a Value<'a>) -> Option<Message<'a>> {
     let transaction = value.get(b"t")?.bytes()?;
-    if transaction.is_empty() || transaction.len() > 8 { return None; }
+    if transaction.is_empty() || transaction.len() > 8 {
+        return None;
+    }
     match value.get(b"y")?.bytes()? {
         b"q" => Some(Message::Query {
             transaction,
             name: value.get(b"q")?.bytes()?,
             args: value.get(b"a")?,
         }),
-        b"r" => Some(Message::Response { transaction, data: value.get(b"r")? }),
+        b"r" => Some(Message::Response {
+            transaction,
+            data: value.get(b"r")?,
+        }),
         b"e" => Some(Message::Error { transaction }),
         _ => None,
     }
@@ -38,12 +52,19 @@ pub fn id(value: &Value<'_>, key: &[u8]) -> Option<Id> {
 
 pub fn encode_query(id: &Id, transaction: u16, method: &[u8], target: &Id) -> Vec<u8> {
     // The target argument is interpreted as target or info_hash by callers.
-    let label = if method == b"get_peers" { b"info_hash".as_slice() } else { b"target".as_slice() };
+    let label = if method == b"get_peers" {
+        b"info_hash".as_slice()
+    } else {
+        b"target".as_slice()
+    };
     let tx = transaction.to_be_bytes();
     let args = if method == b"ping" {
         Value::Dict(vec![(b"id", Value::Bytes(id))])
     } else {
-        Value::Dict(vec![(b"id", Value::Bytes(id)), (label, Value::Bytes(target))])
+        Value::Dict(vec![
+            (b"id", Value::Bytes(id)),
+            (label, Value::Bytes(target)),
+        ])
     };
     bencode::encode(&Value::Dict(vec![
         (b"a", args),
@@ -63,7 +84,10 @@ pub fn encode_response(transaction: &[u8], data: Value<'_>) -> Vec<u8> {
 
 pub fn encode_error(transaction: &[u8], code: i64, text: &[u8]) -> Vec<u8> {
     bencode::encode(&Value::Dict(vec![
-        (b"e", Value::List(vec![Value::Integer(code), Value::Bytes(text)])),
+        (
+            b"e",
+            Value::List(vec![Value::Integer(code), Value::Bytes(text)]),
+        ),
         (b"t", Value::Bytes(transaction)),
         (b"y", Value::Bytes(b"e")),
     ]))
@@ -76,14 +100,18 @@ pub fn compact_node(contact: &NodeContact, out: &mut Vec<u8>) {
 }
 
 pub fn decode_nodes(bytes: &[u8], max: usize) -> Vec<NodeContact> {
-    bytes.chunks_exact(26).take(max).filter_map(|chunk| {
-        let mut id = [0; 20];
-        id.copy_from_slice(&chunk[..20]);
-        let ip = Ipv4Addr::new(chunk[20], chunk[21], chunk[22], chunk[23]);
-        let port = u16::from_be_bytes([chunk[24], chunk[25]]);
-        let addr = SocketAddrV4::new(ip, port);
-        valid_public_address(SocketAddr::V4(addr)).then_some(NodeContact { id, addr })
-    }).collect()
+    bytes
+        .chunks_exact(26)
+        .take(max)
+        .filter_map(|chunk| {
+            let mut id = [0; 20];
+            id.copy_from_slice(&chunk[..20]);
+            let ip = Ipv4Addr::new(chunk[20], chunk[21], chunk[22], chunk[23]);
+            let port = u16::from_be_bytes([chunk[24], chunk[25]]);
+            let addr = SocketAddrV4::new(ip, port);
+            valid_public_address(SocketAddr::V4(addr)).then_some(NodeContact { id, addr })
+        })
+        .collect()
 }
 
 pub fn compact_peer(addr: SocketAddrV4) -> [u8; 6] {
@@ -94,15 +122,23 @@ pub fn compact_peer(addr: SocketAddrV4) -> [u8; 6] {
 }
 
 pub fn decode_peers(value: &Value<'_>, max: usize) -> Vec<SocketAddrV4> {
-    let Some(items) = value.list() else { return Vec::new() };
-    items.iter().filter_map(|v| {
-        let bytes = v.bytes()?;
-        if bytes.len() != 6 { return None; }
-        let ip = Ipv4Addr::new(bytes[0],bytes[1],bytes[2],bytes[3]);
-        let port = u16::from_be_bytes([bytes[4], bytes[5]]);
-        let addr = SocketAddrV4::new(ip, port);
-        valid_public_address(SocketAddr::V4(addr)).then_some(addr)
-    }).take(max).collect()
+    let Some(items) = value.list() else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|v| {
+            let bytes = v.bytes()?;
+            if bytes.len() != 6 {
+                return None;
+            }
+            let ip = Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3]);
+            let port = u16::from_be_bytes([bytes[4], bytes[5]]);
+            let addr = SocketAddrV4::new(ip, port);
+            valid_public_address(SocketAddr::V4(addr)).then_some(addr)
+        })
+        .take(max)
+        .collect()
 }
 
 /// Avoid wasting network budget on unroutable responses and reduce the risk
@@ -149,12 +185,24 @@ mod tests {
     #[test]
     fn roundtrip_queries_and_compact_nodes() {
         let node_id = [17u8; 20];
-        let packet = encode_query(&node_id, 12, b"sample_infohashes", &[42;20]);
+        let packet = encode_query(&node_id, 12, b"sample_infohashes", &[42; 20]);
         let value = bencode::decode(&packet, 2048).unwrap();
-        assert!(matches!(parse(&value), Some(Message::Query { name: b"sample_infohashes", .. })));
-        let address = SocketAddrV4::new(Ipv4Addr::new(8,8,8,8), 6881);
+        assert!(matches!(
+            parse(&value),
+            Some(Message::Query {
+                name: b"sample_infohashes",
+                ..
+            })
+        ));
+        let address = SocketAddrV4::new(Ipv4Addr::new(8, 8, 8, 8), 6881);
         let mut out = Vec::new();
-        compact_node(&NodeContact { id: node_id, addr: address }, &mut out);
+        compact_node(
+            &NodeContact {
+                id: node_id,
+                addr: address,
+            },
+            &mut out,
+        );
         assert_eq!(decode_nodes(&out, 10)[0].addr, address);
     }
 }

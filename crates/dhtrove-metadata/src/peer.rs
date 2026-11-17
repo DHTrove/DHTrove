@@ -52,10 +52,14 @@ impl std::fmt::Display for FetchError {
 }
 impl std::error::Error for FetchError {}
 impl From<std::io::Error> for FetchError {
-    fn from(err: std::io::Error) -> Self { Self::Io(err) }
+    fn from(err: std::io::Error) -> Self {
+        Self::Io(err)
+    }
 }
 impl From<InfoError> for FetchError {
-    fn from(err: InfoError) -> Self { Self::Info(err) }
+    fn from(err: InfoError) -> Self {
+        Self::Info(err)
+    }
 }
 
 pub async fn fetch(
@@ -65,9 +69,14 @@ pub async fn fetch(
     config: FetchConfig,
 ) -> Result<TorrentRecord, FetchError> {
     let stream = timeout(config.connect_timeout, TcpStream::connect(peer))
-        .await.map_err(|_| FetchError::Timeout)??;
-    timeout(config.transfer_timeout, exchange(stream, observed_hash, peer_id, config))
-        .await.map_err(|_| FetchError::Timeout)?
+        .await
+        .map_err(|_| FetchError::Timeout)??;
+    timeout(
+        config.transfer_timeout,
+        exchange(stream, observed_hash, peer_id, config),
+    )
+    .await
+    .map_err(|_| FetchError::Timeout)?
 }
 
 async fn exchange(
@@ -93,9 +102,13 @@ async fn exchange(
         return Err(FetchError::Protocol("peer does not support BEP 10"));
     }
 
-    let extension_handshake = bencode::encode(&Value::Dict(vec![
-        (b"m", Value::Dict(vec![(b"ut_metadata", Value::Integer(i64::from(OUR_METADATA_ID)))])),
-    ]));
+    let extension_handshake = bencode::encode(&Value::Dict(vec![(
+        b"m",
+        Value::Dict(vec![(
+            b"ut_metadata",
+            Value::Integer(i64::from(OUR_METADATA_ID)),
+        )]),
+    )]));
     let mut msg = vec![20, 0];
     msg.extend_from_slice(&extension_handshake);
     write_frame(&mut stream, &msg).await?;
@@ -104,16 +117,21 @@ async fn exchange(
     let mut metadata_size = None;
     for _ in 0..100 {
         let packet = read_frame(&mut stream, config.max_frame_bytes).await?;
-        if packet.len() < 2 || packet[0] != 20 || packet[1] != 0 { continue; }
+        if packet.len() < 2 || packet[0] != 20 || packet[1] != 0 {
+            continue;
+        }
         let header = bencode::decode(&packet[2..], config.max_frame_bytes)
             .map_err(|_| FetchError::Protocol("invalid BEP 10 handshake"))?;
-        let id = header.get(b"m")
+        let id = header
+            .get(b"m")
             .and_then(|v| v.get(b"ut_metadata"))
             .and_then(Value::integer)
             .and_then(|v| u8::try_from(v).ok())
             .filter(|id| *id != 0)
             .ok_or(FetchError::Protocol("peer does not advertise ut_metadata"))?;
-        let size = header.get(b"metadata_size").and_then(Value::integer)
+        let size = header
+            .get(b"metadata_size")
+            .and_then(Value::integer)
             .and_then(|v| usize::try_from(v).ok())
             .filter(|size| *size > 0 && *size <= config.max_metadata_bytes)
             .ok_or(FetchError::Protocol("invalid or oversized metadata size"))?;
@@ -150,17 +168,27 @@ async fn exchange(
         }
         let (header, prefix) = bencode::decode_prefix(&response[2..], config.max_frame_bytes)
             .map_err(|_| FetchError::Protocol("malformed BEP 9 response header"))?;
-        let kind = header.get(b"msg_type").and_then(Value::integer)
+        let kind = header
+            .get(b"msg_type")
+            .and_then(Value::integer)
             .ok_or(FetchError::Protocol("missing metadata message type"))?;
-        let piece = header.get(b"piece").and_then(Value::integer)
+        let piece = header
+            .get(b"piece")
+            .and_then(Value::integer)
             .and_then(|v| usize::try_from(v).ok())
             .ok_or(FetchError::Protocol("invalid metadata piece index"))?;
         if piece >= pieces || !requested[piece] {
             return Err(FetchError::Protocol("unsolicited metadata piece"));
         }
-        if kind == 2 { return Err(FetchError::Protocol("peer rejected metadata request")); }
-        if kind != 1 { continue; }
-        let advertised = header.get(b"total_size").and_then(Value::integer)
+        if kind == 2 {
+            return Err(FetchError::Protocol("peer rejected metadata request"));
+        }
+        if kind != 1 {
+            continue;
+        }
+        let advertised = header
+            .get(b"total_size")
+            .and_then(Value::integer)
             .and_then(|v| usize::try_from(v).ok());
         if advertised != Some(total) {
             return Err(FetchError::Protocol("metadata size changed mid-transfer"));
@@ -184,7 +212,8 @@ async fn exchange(
 }
 
 async fn write_frame(stream: &mut TcpStream, bytes: &[u8]) -> Result<(), FetchError> {
-    let length = u32::try_from(bytes.len()).map_err(|_| FetchError::Protocol("outgoing frame too large"))?;
+    let length =
+        u32::try_from(bytes.len()).map_err(|_| FetchError::Protocol("outgoing frame too large"))?;
     stream.write_all(&length.to_be_bytes()).await?;
     stream.write_all(bytes).await?;
     Ok(())
@@ -192,7 +221,9 @@ async fn write_frame(stream: &mut TcpStream, bytes: &[u8]) -> Result<(), FetchEr
 
 async fn read_frame(stream: &mut TcpStream, max: usize) -> Result<Vec<u8>, FetchError> {
     let length = stream.read_u32().await? as usize;
-    if length > max { return Err(FetchError::Protocol("peer frame exceeds metadata limit")); }
+    if length > max {
+        return Err(FetchError::Protocol("peer frame exceeds metadata limit"));
+    }
     let mut data = vec![0; length];
     stream.read_exact(&mut data).await?;
     Ok(data)

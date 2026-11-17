@@ -5,8 +5,8 @@ use sha1::{Digest, Sha1};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::net::{lookup_host, UdpSocket};
 use tokio::sync::{mpsc, oneshot, watch, Semaphore};
@@ -79,7 +79,10 @@ struct Counters {
 }
 
 #[derive(Clone)]
-struct RateEntry { since: Instant, count: u32 }
+struct RateEntry {
+    since: Instant,
+    count: u32,
+}
 
 #[derive(Clone)]
 struct PeerSet {
@@ -88,14 +91,18 @@ struct PeerSet {
 }
 
 struct TokenSecrets {
-    latest: [u8;20],
-    prior: [u8;20],
+    latest: [u8; 20],
+    prior: [u8; 20],
     since: Instant,
 }
 
 impl TokenSecrets {
     fn new() -> Self {
-        Self { latest: rand::random(), prior: rand::random(), since: Instant::now() }
+        Self {
+            latest: rand::random(),
+            prior: rand::random(),
+            since: Instant::now(),
+        }
     }
     fn rotate(&mut self) {
         if self.since.elapsed() >= Duration::from_secs(300) {
@@ -104,20 +111,19 @@ impl TokenSecrets {
             self.since = Instant::now();
         }
     }
-    fn hash(secret: &[u8;20], ip: Ipv4Addr) -> [u8;20] {
+    fn hash(secret: &[u8; 20], ip: Ipv4Addr) -> [u8; 20] {
         let mut hasher = Sha1::new();
         hasher.update(ip.octets());
         hasher.update(secret);
         hasher.finalize().into()
     }
-    fn issue(&mut self, ip: Ipv4Addr) -> [u8;20] {
+    fn issue(&mut self, ip: Ipv4Addr) -> [u8; 20] {
         self.rotate();
         Self::hash(&self.latest, ip)
     }
     fn valid(&mut self, ip: Ipv4Addr, presented: &[u8]) -> bool {
         self.rotate();
-        (presented == Self::hash(&self.latest, ip)
-            || presented == Self::hash(&self.prior, ip))
+        (presented == Self::hash(&self.latest, ip) || presented == Self::hash(&self.prior, ip))
             && presented.len() == 20
     }
 }
@@ -127,7 +133,7 @@ struct Inner {
     config: DhtConfig,
     own_id: Id,
     routing: Mutex<Routing>,
-    pending: Mutex<HashMap<(SocketAddrV4,u16), oneshot::Sender<Vec<u8>>>>,
+    pending: Mutex<HashMap<(SocketAddrV4, u16), oneshot::Sender<Vec<u8>>>>,
     candidate_tx: mpsc::Sender<SocketAddrV4>,
     sightings: mpsc::Sender<Sighting>,
     peers: Mutex<HashMap<Id, PeerSet>>,
@@ -157,7 +163,10 @@ impl DhtNode {
             || config.query_interval.is_zero()
             || config.query_timeout.is_zero()
         {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "DHT limits must be positive"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "DHT limits must be positive",
+            ));
         }
         let socket = UdpSocket::bind(config.bind).await?;
         let id: Id = rand::random();
@@ -189,7 +198,12 @@ impl DhtNode {
             replies_received: c.replies.load(Ordering::Relaxed),
             discovered_hashes: c.discovered.load(Ordering::Relaxed),
             sightings_dropped: c.dropped.load(Ordering::Relaxed),
-            verified_nodes: self.inner.routing.lock().expect("routing mutex poisoned").count(),
+            verified_nodes: self
+                .inner
+                .routing
+                .lock()
+                .expect("routing mutex poisoned")
+                .count(),
         }
     }
 
@@ -207,18 +221,32 @@ impl DhtNode {
 
     fn emit(&self, sighting: Sighting) {
         match self.inner.sightings.try_send(sighting) {
-            Ok(()) => { self.inner.counters.discovered.fetch_add(1, Ordering::Relaxed); }
-            Err(_) => { self.inner.counters.dropped.fetch_add(1, Ordering::Relaxed); }
+            Ok(()) => {
+                self.inner
+                    .counters
+                    .discovered
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            Err(_) => {
+                self.inner.counters.dropped.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 
     fn observe_peer(&self, hash: Id, peer: SocketAddrV4) {
-        if !self.allowed(peer) { return; }
+        if !self.allowed(peer) {
+            return;
+        }
         let mut peers = self.inner.peers.lock().expect("peers mutex poisoned");
         if peers.len() >= MAX_SEEN && !peers.contains_key(&hash) {
-            if let Some(key) = peers.keys().next().copied() { peers.remove(&key); }
+            if let Some(key) = peers.keys().next().copied() {
+                peers.remove(&key);
+            }
         }
-        let set = peers.entry(hash).or_insert_with(|| PeerSet { updated: Instant::now(), peers: Vec::new() });
+        let set = peers.entry(hash).or_insert_with(|| PeerSet {
+            updated: Instant::now(),
+            peers: Vec::new(),
+        });
         set.updated = Instant::now();
         if !set.peers.contains(&peer) {
             if set.peers.len() >= self.inner.config.max_peers_per_hash {
@@ -302,10 +330,14 @@ impl DhtNode {
     async fn resolve_bootstrap(&self) -> Vec<SocketAddrV4> {
         let mut resolved = Vec::new();
         for hostname in &self.inner.config.bootstrap {
-            if let Ok(Ok(addresses)) = timeout(Duration::from_secs(3), lookup_host(hostname.as_str())).await {
+            if let Ok(Ok(addresses)) =
+                timeout(Duration::from_secs(3), lookup_host(hostname.as_str())).await
+            {
                 for address in addresses {
                     if let SocketAddr::V4(v4) = address {
-                        if self.allowed(v4) { resolved.push(v4); }
+                        if self.allowed(v4) {
+                            resolved.push(v4);
+                        }
                     }
                 }
             }
@@ -314,7 +346,9 @@ impl DhtNode {
     }
 
     async fn query(&self, addr: SocketAddrV4, method: &[u8], target: Id) -> Option<Response> {
-        if !self.allowed(addr) { return None; }
+        if !self.allowed(addr) {
+            return None;
+        }
         let _permit = self.inner.permits.acquire().await.ok()?;
         let (send, receive) = oneshot::channel();
         let transaction;
@@ -334,18 +368,36 @@ impl DhtNode {
         let payload = krpc::encode_query(&self.inner.own_id, transaction, method, &target);
         self.inner.counters.sent.fetch_add(1, Ordering::Relaxed);
         if self.inner.socket.send_to(&payload, addr).await.is_err() {
-            self.inner.pending.lock().expect("pending mutex poisoned").remove(&(addr, transaction));
+            self.inner
+                .pending
+                .lock()
+                .expect("pending mutex poisoned")
+                .remove(&(addr, transaction));
             return None;
         }
         let reply = timeout(self.inner.config.query_timeout, receive).await;
-        self.inner.pending.lock().expect("pending mutex poisoned").remove(&(addr, transaction));
+        self.inner
+            .pending
+            .lock()
+            .expect("pending mutex poisoned")
+            .remove(&(addr, transaction));
         let packet = reply.ok()?.ok()?;
         let data = bencode::decode(&packet, MAX_PACKET).ok()?;
-        let Message::Response { data, .. } = krpc::parse(&data)? else { return None; };
+        let Message::Response { data, .. } = krpc::parse(&data)? else {
+            return None;
+        };
         let id = krpc::id(data, b"id")?;
-        if id == self.inner.own_id { return None; }
-        self.inner.routing.lock().expect("routing mutex poisoned").insert_verified(NodeContact { id, addr });
-        let nodes = data.get(b"nodes").and_then(Value::bytes)
+        if id == self.inner.own_id {
+            return None;
+        }
+        self.inner
+            .routing
+            .lock()
+            .expect("routing mutex poisoned")
+            .insert_verified(NodeContact { id, addr });
+        let nodes = data
+            .get(b"nodes")
+            .and_then(Value::bytes)
             .map(|bytes| krpc::decode_nodes(bytes, 128))
             .unwrap_or_default();
         for contact in &nodes {
@@ -353,32 +405,60 @@ impl DhtNode {
                 let _ = self.inner.candidate_tx.try_send(contact.addr);
             }
         }
-        let peers = data.get(b"values")
+        let peers = data
+            .get(b"values")
             .map(|value| krpc::decode_peers(value, 48))
             .unwrap_or_default();
         let infohash = target;
         if method == b"get_peers" {
             for peer in &peers {
                 self.observe_peer(infohash, *peer);
-                self.emit(Sighting { infohash, peer: Some(*peer), hint: Some(addr) });
+                self.emit(Sighting {
+                    infohash,
+                    peer: Some(*peer),
+                    hint: Some(addr),
+                });
             }
         }
-        let samples = data.get(b"samples").and_then(Value::bytes)
+        let samples = data
+            .get(b"samples")
+            .and_then(Value::bytes)
             .filter(|bytes| bytes.len() % 20 == 0 && bytes.len() <= 800)
-            .map(|bytes| bytes.chunks_exact(20).filter_map(|chunk| chunk.try_into().ok()).collect())
+            .map(|bytes| {
+                bytes
+                    .chunks_exact(20)
+                    .filter_map(|chunk| chunk.try_into().ok())
+                    .collect()
+            })
             .unwrap_or_default();
         for hash in &samples {
-            self.emit(Sighting { infohash: *hash, peer: None, hint: Some(addr) });
+            self.emit(Sighting {
+                infohash: *hash,
+                peer: None,
+                hint: Some(addr),
+            });
         }
-        let interval_secs = data.get(b"interval").and_then(Value::integer)
-            .unwrap_or(300).clamp(0,21_600) as u64;
-        Some(Response { nodes, peers, interval: Duration::from_secs(interval_secs) })
+        let interval_secs = data
+            .get(b"interval")
+            .and_then(Value::integer)
+            .unwrap_or(300)
+            .clamp(0, 21_600) as u64;
+        Some(Response {
+            nodes,
+            peers,
+            interval: Duration::from_secs(interval_secs),
+        })
     }
 
     /// Iterative bounded get_peers walk; no unsolicited outbound announcements.
     pub async fn find_peers(&self, hash: Id, hints: &[SocketAddrV4]) -> Vec<SocketAddrV4> {
         let mut queue: VecDeque<_> = hints.iter().copied().filter(|a| self.allowed(*a)).collect();
-        let nearest = self.inner.routing.lock().expect("routing mutex poisoned").nearest(&hash, 16);
+        let nearest = self
+            .inner
+            .routing
+            .lock()
+            .expect("routing mutex poisoned")
+            .nearest(&hash, 16);
         queue.extend(nearest.iter().map(|node| node.addr));
         let mut tried = HashSet::new();
         let mut peers = HashSet::new();
@@ -386,18 +466,27 @@ impl DhtNode {
         let budget = self.inner.config.lookup_budget.min(256);
         while tried.len() < budget || !tasks.is_empty() {
             while tasks.len() < 4 && tried.len() < budget {
-                let Some(addr) = queue.pop_front() else { break; };
-                if !tried.insert(addr) { continue; }
+                let Some(addr) = queue.pop_front() else {
+                    break;
+                };
+                if !tried.insert(addr) {
+                    continue;
+                }
                 let node = self.clone();
                 tasks.spawn(async move { node.query(addr, b"get_peers", hash).await });
             }
-            let Some(result) = tasks.join_next().await else { break; };
+            let Some(result) = tasks.join_next().await else {
+                break;
+            };
             if let Ok(Some(response)) = result {
                 for peer in response.peers {
                     peers.insert(peer);
                 }
                 for contact in response.nodes {
-                    if self.allowed(contact.addr) && !tried.contains(&contact.addr) && queue.len() < 1_000 {
+                    if self.allowed(contact.addr)
+                        && !tried.contains(&contact.addr)
+                        && queue.len() < 1_000
+                    {
                         queue.push_back(contact.addr);
                     }
                 }
@@ -410,22 +499,44 @@ impl DhtNode {
         let mut buffer = [0; MAX_PACKET];
         loop {
             let (size, from) = self.inner.socket.recv_from(&mut buffer).await?;
-            let SocketAddr::V4(addr) = from else { continue; };
-            if !self.allowed(addr) { continue; }
+            let SocketAddr::V4(addr) = from else {
+                continue;
+            };
+            if !self.allowed(addr) {
+                continue;
+            }
             self.inner.counters.received.fetch_add(1, Ordering::Relaxed);
-            let Ok(root) = bencode::decode(&buffer[..size], MAX_PACKET) else { continue; };
-            let Some(message) = krpc::parse(&root) else { continue; };
+            let Ok(root) = bencode::decode(&buffer[..size], MAX_PACKET) else {
+                continue;
+            };
+            let Some(message) = krpc::parse(&root) else {
+                continue;
+            };
             match message {
                 Message::Response { transaction, .. } | Message::Error { transaction } => {
-                    if transaction.len() != 2 { continue; }
-                    let tx = u16::from_be_bytes([transaction[0],transaction[1]]);
-                    if let Some(sender) = self.inner.pending.lock().expect("pending mutex poisoned").remove(&(addr,tx)) {
+                    if transaction.len() != 2 {
+                        continue;
+                    }
+                    let tx = u16::from_be_bytes([transaction[0], transaction[1]]);
+                    if let Some(sender) = self
+                        .inner
+                        .pending
+                        .lock()
+                        .expect("pending mutex poisoned")
+                        .remove(&(addr, tx))
+                    {
                         let _ = sender.send(buffer[..size].to_vec());
                         self.inner.counters.replies.fetch_add(1, Ordering::Relaxed);
                     }
                 }
-                Message::Query { transaction, name, args } => {
-                    if !self.allow_request(addr) { continue; }
+                Message::Query {
+                    transaction,
+                    name,
+                    args,
+                } => {
+                    if !self.allow_request(addr) {
+                        continue;
+                    }
                     let reply = self.answer(addr, transaction, name, args);
                     if let Some(packet) = reply {
                         if packet.len() <= 1400 {
@@ -441,9 +552,14 @@ impl DhtNode {
         let mut rates = self.inner.rates.lock().expect("rates mutex poisoned");
         if rates.len() > 20_000 {
             rates.retain(|_, entry| entry.since.elapsed() < Duration::from_secs(3));
-            if rates.len() > 20_000 { rates.clear(); }
+            if rates.len() > 20_000 {
+                rates.clear();
+            }
         }
-        let entry = rates.entry(*addr.ip()).or_insert(RateEntry { since: Instant::now(), count: 0 });
+        let entry = rates.entry(*addr.ip()).or_insert(RateEntry {
+            since: Instant::now(),
+            count: 0,
+        });
         if entry.since.elapsed() >= Duration::from_secs(1) {
             entry.since = Instant::now();
             entry.count = 0;
@@ -452,7 +568,13 @@ impl DhtNode {
         entry.count <= self.inner.config.inbound_queries_per_ip_second
     }
 
-    fn answer(&self, source: SocketAddrV4, tx: &[u8], method: &[u8], args: &Value<'_>) -> Option<Vec<u8>> {
+    fn answer(
+        &self,
+        source: SocketAddrV4,
+        tx: &[u8],
+        method: &[u8],
+        args: &Value<'_>,
+    ) -> Option<Vec<u8>> {
         let _remote_id = krpc::id(args, b"id")?;
         let id = &self.inner.own_id;
         let target = if method == b"get_peers" || method == b"announce_peer" {
@@ -461,78 +583,135 @@ impl DhtNode {
             krpc::id(args, b"target")
         };
         let nodes = |target: &Id| {
-            let contacts = self.inner.routing.lock().expect("routing mutex poisoned").nearest(target, 8);
+            let contacts = self
+                .inner
+                .routing
+                .lock()
+                .expect("routing mutex poisoned")
+                .nearest(target, 8);
             let mut packed = Vec::with_capacity(contacts.len() * 26);
-            for item in &contacts { krpc::compact_node(item, &mut packed); }
+            for item in &contacts {
+                krpc::compact_node(item, &mut packed);
+            }
             packed
         };
         match method {
-            b"ping" => Some(krpc::encode_response(tx, Value::Dict(vec![(b"id", Value::Bytes(id))]))),
+            b"ping" => Some(krpc::encode_response(
+                tx,
+                Value::Dict(vec![(b"id", Value::Bytes(id))]),
+            )),
             b"find_node" => {
                 let target = target?;
                 let compact = nodes(&target);
-                Some(krpc::encode_response(tx, Value::Dict(vec![
-                    (b"id",Value::Bytes(id)),
-                    (b"nodes",Value::Bytes(&compact)),
-                ])))
+                Some(krpc::encode_response(
+                    tx,
+                    Value::Dict(vec![
+                        (b"id", Value::Bytes(id)),
+                        (b"nodes", Value::Bytes(&compact)),
+                    ]),
+                ))
             }
             b"get_peers" => {
                 let target = target?;
-                self.emit(Sighting { infohash: target, peer: None, hint: Some(source) });
+                self.emit(Sighting {
+                    infohash: target,
+                    peer: None,
+                    hint: Some(source),
+                });
                 let compact = nodes(&target);
-                let token = self.inner.secrets.lock().expect("token mutex poisoned").issue(*source.ip());
-                let peers = self.inner.peers.lock().expect("peers mutex poisoned")
+                let token = self
+                    .inner
+                    .secrets
+                    .lock()
+                    .expect("token mutex poisoned")
+                    .issue(*source.ip());
+                let peers = self
+                    .inner
+                    .peers
+                    .lock()
+                    .expect("peers mutex poisoned")
                     .get(&target)
-                    .filter(|set| set.updated.elapsed() < Duration::from_secs(45*60))
+                    .filter(|set| set.updated.elapsed() < Duration::from_secs(45 * 60))
                     .map(|set| set.peers.clone())
                     .unwrap_or_default();
-                let values: Vec<[u8;6]> = peers.iter().take(12).map(|p| krpc::compact_peer(*p)).collect();
+                let values: Vec<[u8; 6]> = peers
+                    .iter()
+                    .take(12)
+                    .map(|p| krpc::compact_peer(*p))
+                    .collect();
                 let mut fields: Vec<(&[u8], Value<'_>)> = vec![
                     (b"id", Value::Bytes(id)),
-                    (b"nodes",Value::Bytes(&compact)),
-                    (b"token",Value::Bytes(&token)),
+                    (b"nodes", Value::Bytes(&compact)),
+                    (b"token", Value::Bytes(&token)),
                 ];
                 if !values.is_empty() {
-                    fields.push((b"values",Value::List(values.iter().map(|v|Value::Bytes(v)).collect())));
+                    fields.push((
+                        b"values",
+                        Value::List(values.iter().map(|v| Value::Bytes(v)).collect()),
+                    ));
                 }
                 Some(krpc::encode_response(tx, Value::Dict(fields)))
             }
             b"announce_peer" => {
                 let target = target?;
                 let token = args.get(b"token")?.bytes()?;
-                if !self.inner.secrets.lock().expect("token mutex poisoned").valid(*source.ip(), token) {
+                if !self
+                    .inner
+                    .secrets
+                    .lock()
+                    .expect("token mutex poisoned")
+                    .valid(*source.ip(), token)
+                {
                     return Some(krpc::encode_error(tx, 203, b"Invalid token"));
                 }
-                let implicit = args.get(b"implied_port").and_then(Value::integer).unwrap_or(0) != 0;
+                let implicit = args
+                    .get(b"implied_port")
+                    .and_then(Value::integer)
+                    .unwrap_or(0)
+                    != 0;
                 let port = if implicit {
                     source.port()
                 } else {
                     u16::try_from(args.get(b"port")?.integer()?).ok()?
                 };
-                if port == 0 { return Some(krpc::encode_error(tx, 203, b"Invalid port")); }
+                if port == 0 {
+                    return Some(krpc::encode_error(tx, 203, b"Invalid port"));
+                }
                 let peer = SocketAddrV4::new(*source.ip(), port);
                 self.observe_peer(target, peer);
-                self.emit(Sighting { infohash: target, peer: Some(peer), hint: Some(source) });
-                Some(krpc::encode_response(tx, Value::Dict(vec![(b"id",Value::Bytes(id))])))
+                self.emit(Sighting {
+                    infohash: target,
+                    peer: Some(peer),
+                    hint: Some(source),
+                });
+                Some(krpc::encode_response(
+                    tx,
+                    Value::Dict(vec![(b"id", Value::Bytes(id))]),
+                ))
             }
             b"sample_infohashes" => {
                 let target = target?;
                 let compact = nodes(&target);
                 let hashes = self.inner.peers.lock().expect("peers mutex poisoned");
                 let mut samples = Vec::new();
-                for (hash,set) in hashes.iter()
-                    .filter(|(_,set)| set.updated.elapsed() < Duration::from_secs(45*60))
-                    .take(MAX_SAMPLE) {
+                for (hash, set) in hashes
+                    .iter()
+                    .filter(|(_, set)| set.updated.elapsed() < Duration::from_secs(45 * 60))
+                    .take(MAX_SAMPLE)
+                {
                     samples.extend_from_slice(hash);
                 }
                 let total = hashes.len() as i64;
-                Some(krpc::encode_response(tx, Value::Dict(vec![
-                    (b"id",Value::Bytes(id)),
-                    (b"interval",Value::Integer(300)),
-                    (b"nodes",Value::Bytes(&compact)),
-                    (b"num",Value::Integer(total)),
-                    (b"samples",Value::Bytes(&samples)),
-                ])))
+                Some(krpc::encode_response(
+                    tx,
+                    Value::Dict(vec![
+                        (b"id", Value::Bytes(id)),
+                        (b"interval", Value::Integer(300)),
+                        (b"nodes", Value::Bytes(&compact)),
+                        (b"num", Value::Integer(total)),
+                        (b"samples", Value::Bytes(&samples)),
+                    ]),
+                ))
             }
             _ => Some(krpc::encode_error(tx, 204, b"Method Unknown")),
         }
@@ -545,9 +724,9 @@ mod tests {
     #[test]
     fn token_is_scoped_to_ip_and_rotates() {
         let mut secrets = TokenSecrets::new();
-        let ip = Ipv4Addr::new(8,8,8,8);
+        let ip = Ipv4Addr::new(8, 8, 8, 8);
         let token = secrets.issue(ip);
         assert!(secrets.valid(ip, &token));
-        assert!(!secrets.valid(Ipv4Addr::new(8,8,4,4), &token));
+        assert!(!secrets.valid(Ipv4Addr::new(8, 8, 4, 4), &token));
     }
 }

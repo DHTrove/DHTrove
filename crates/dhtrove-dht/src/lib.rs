@@ -7,8 +7,8 @@
 
 pub mod bencode;
 pub mod krpc;
-pub mod routing;
 mod node;
+pub mod routing;
 
 pub use node::{DhtConfig, DhtNode, DhtStats, Sighting};
 

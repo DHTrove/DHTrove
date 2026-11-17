@@ -79,10 +79,14 @@ impl fmt::Display for CrawlerError {
 }
 impl std::error::Error for CrawlerError {}
 impl From<std::io::Error> for CrawlerError {
-    fn from(value: std::io::Error) -> Self { Self::Io(value) }
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
+    }
 }
 impl From<StoreError> for CrawlerError {
-    fn from(value: StoreError) -> Self { Self::Store(value) }
+    fn from(value: StoreError) -> Self {
+        Self::Store(value)
+    }
 }
 
 struct Job {
@@ -94,14 +98,23 @@ struct Job {
 
 impl Job {
     fn new() -> Self {
-        Self { peers: Vec::new(), hints: Vec::new(), attempts: 0, not_before: Instant::now() }
+        Self {
+            peers: Vec::new(),
+            hints: Vec::new(),
+            attempts: 0,
+            not_before: Instant::now(),
+        }
     }
     fn add(&mut self, sighting: Sighting, max: usize) {
         if let Some(peer) = sighting.peer {
-            if !self.peers.contains(&peer) && self.peers.len() < max { self.peers.push(peer); }
+            if !self.peers.contains(&peer) && self.peers.len() < max {
+                self.peers.push(peer);
+            }
         }
         if let Some(hint) = sighting.hint {
-            if !self.hints.contains(&hint) && self.hints.len() < max { self.hints.push(hint); }
+            if !self.hints.contains(&hint) && self.hints.len() < max {
+                self.hints.push(hint);
+            }
         }
     }
 }
@@ -136,7 +149,9 @@ fn writer(
     let mut deferred = None;
     let mut since_checkpoint = 0usize;
     loop {
-        let Some(command) = deferred.take().or_else(|| rx.blocking_recv()) else { break; };
+        let Some(command) = deferred.take().or_else(|| rx.blocking_recv()) else {
+            break;
+        };
         match command {
             Command::Exists(hash, sender) => {
                 let _ = sender.send(store.contains_hash(&Infohash::V1(hash)));
@@ -148,7 +163,10 @@ fn writer(
                 while batch.len() < 64 {
                     match rx.try_recv() {
                         Ok(Command::Insert(item)) => batch.push(item),
-                        Ok(other) => { deferred = Some(other); break; }
+                        Ok(other) => {
+                            deferred = Some(other);
+                            break;
+                        }
                         Err(_) => break,
                     }
                 }
@@ -166,7 +184,9 @@ fn writer(
         }
     }
     // Checkpoint if writes occurred; redundant empty stores are not checkpointed.
-    if since_checkpoint > 0 { store.checkpoint()?; }
+    if since_checkpoint > 0 {
+        store.checkpoint()?;
+    }
     Ok(totals)
 }
 
@@ -183,7 +203,7 @@ async fn fetch_one(
     hints: Vec<std::net::SocketAddrV4>,
     config: FetchConfig,
     max_peers: usize,
-    peer_id: [u8;20],
+    peer_id: [u8; 20],
     storage: mpsc::Sender<Command>,
 ) -> FetchResult {
     let (tx, rx) = oneshot::channel();
@@ -197,8 +217,12 @@ async fn fetch_one(
     let mut addresses = peers;
     if addresses.len() < max_peers {
         for peer in node.find_peers(hash, &hints).await {
-            if !addresses.contains(&peer) { addresses.push(peer); }
-            if addresses.len() >= max_peers { break; }
+            if !addresses.contains(&peer) {
+                addresses.push(peer);
+            }
+            if addresses.len() >= max_peers {
+                break;
+            }
         }
     }
     for peer in addresses.into_iter().take(max_peers) {
@@ -224,18 +248,24 @@ impl Crawler {
             || config.max_peers_per_torrent == 0
             || config.max_fetch_attempts == 0
         {
-            return Err(CrawlerError::InvalidConfig("all queue and worker limits must be positive"));
+            return Err(CrawlerError::InvalidConfig(
+                "all queue and worker limits must be positive",
+            ));
         }
         Ok(Self { config })
     }
 
     /// Run until the shutdown sender changes to true or drops.
     /// Network integration tests are separate from codec unit tests.
-    pub async fn run(self, mut shutdown: watch::Receiver<bool>) -> Result<CrawlReport, CrawlerError> {
+    pub async fn run(
+        self,
+        mut shutdown: watch::Receiver<bool>,
+    ) -> Result<CrawlReport, CrawlerError> {
         let (storage_tx, storage_rx) = mpsc::channel(4_096);
         let (ready_tx, ready_rx) = oneshot::channel();
         let writer_cfg = self.config.clone();
-        let writer_handle = tokio::task::spawn_blocking(move || writer(writer_cfg, storage_rx, ready_tx));
+        let writer_handle =
+            tokio::task::spawn_blocking(move || writer(writer_cfg, storage_rx, ready_tx));
         match ready_rx.await {
             Ok(Ok(())) => {}
             Ok(Err(reason)) => return Err(CrawlerError::Worker(reason)),
@@ -246,7 +276,7 @@ impl Crawler {
         let node_clone = node.clone();
         let node_shutdown = shutdown.clone();
         let mut node_handle = tokio::spawn(async move { node_clone.run(node_shutdown).await });
-        let peer_id: [u8;20] = rand::random();
+        let peer_id: [u8; 20] = rand::random();
 
         let mut jobs: HashMap<Id, Job> = HashMap::new();
         let mut pending = VecDeque::new();
@@ -257,7 +287,9 @@ impl Crawler {
         let mut report = CrawlReport::default();
 
         loop {
-            if *shutdown.borrow() { break; }
+            if *shutdown.borrow() {
+                break;
+            }
             tokio::select! {
                 changed = shutdown.changed() => {
                     if changed.is_err() || *shutdown.borrow() { break; }
@@ -344,7 +376,8 @@ impl Crawler {
         let _ = node_handle.await;
         let _ = storage_tx.send(Command::Close).await;
         drop(storage_tx);
-        let totals = writer_handle.await
+        let totals = writer_handle
+            .await
             .map_err(|err| CrawlerError::Worker(err.to_string()))??;
         report.records_inserted = totals.inserted;
         report.duplicates_skipped = totals.duplicates;
