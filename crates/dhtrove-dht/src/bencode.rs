@@ -257,6 +257,6 @@ mod tests {
         assert!(decode(b"d1:ai1e1:ai2ee", 128).is_err());
         assert!(decode(b"i03e", 128).is_err());
         assert!(decode(b"4:ab", 128).is_err());
-        assert!(decode(&vec![b'l'; 45], 1024).is_err());
+        assert!(decode(&[b'l'; 45], 1024).is_err());
     }
 }

@@ -128,12 +128,14 @@ impl TokenSecrets {
     }
 }
 
+type PendingMap = HashMap<(SocketAddrV4, u16), oneshot::Sender<Vec<u8>>>;
+
 struct Inner {
     socket: UdpSocket,
     config: DhtConfig,
     own_id: Id,
     routing: Mutex<Routing>,
-    pending: Mutex<HashMap<(SocketAddrV4, u16), oneshot::Sender<Vec<u8>>>>,
+    pending: Mutex<PendingMap>,
     candidate_tx: mpsc::Sender<SocketAddrV4>,
     sightings: mpsc::Sender<Sighting>,
     peers: Mutex<HashMap<Id, PeerSet>>,
