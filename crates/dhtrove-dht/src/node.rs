@@ -420,7 +420,7 @@ impl DhtNode {
                 });
             }
         }
-        let samples = data
+        let samples: Vec<Id> = data
             .get(b"samples")
             .and_then(Value::bytes)
             .filter(|bytes| bytes.len() % 20 == 0 && bytes.len() <= 800)
@@ -694,7 +694,7 @@ impl DhtNode {
                 let compact = nodes(&target);
                 let hashes = self.inner.peers.lock().expect("peers mutex poisoned");
                 let mut samples = Vec::new();
-                for (hash, set) in hashes
+                for (hash, _set) in hashes
                     .iter()
                     .filter(|(_, set)| set.updated.elapsed() < Duration::from_secs(45 * 60))
                     .take(MAX_SAMPLE)
