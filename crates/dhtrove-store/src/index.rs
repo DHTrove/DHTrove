@@ -113,7 +113,10 @@ impl HashIndex {
         }
         let mut rows: Vec<_> = self.iter().collect();
         rows.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-        let n_v1 = rows.iter().filter(|(key, _)| matches!(key, Infohash::V1(_))).count();
+        let n_v1 = rows
+            .iter()
+            .filter(|(key, _)| matches!(key, Infohash::V1(_)))
+            .count();
         let (mut v1, mut v2) = (
             Vec::with_capacity(n_v1),
             Vec::with_capacity(rows.len() - n_v1),
