@@ -72,8 +72,7 @@ impl Service {
         }
         let crawler_settings = self.settings.read().await.clone();
         let config = crawler_settings.crawler(&self.directory);
-        let crawler = Crawler::new(config)
-            .map_err(|err| ApiError::bad_request(err.to_string()))?;
+        let crawler = Crawler::new(config).map_err(|err| ApiError::bad_request(err.to_string()))?;
         let (stop, receiver) = watch::channel(false);
         let metrics = Arc::new(CrawlerMetrics::default());
         let generation = lifecycle.completed + 1;
@@ -177,13 +176,22 @@ pub struct ApiError {
 
 impl ApiError {
     fn bad_request(message: impl Into<String>) -> Self {
-        Self { status: StatusCode::BAD_REQUEST, message: message.into() }
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: message.into(),
+        }
     }
     fn conflict(message: impl Into<String>) -> Self {
-        Self { status: StatusCode::CONFLICT, message: message.into() }
+        Self {
+            status: StatusCode::CONFLICT,
+            message: message.into(),
+        }
     }
     fn internal(message: impl Into<String>) -> Self {
-        Self { status: StatusCode::INTERNAL_SERVER_ERROR, message: message.into() }
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: message.into(),
+        }
     }
 }
 impl IntoResponse for ApiError {
@@ -193,7 +201,9 @@ impl IntoResponse for ApiError {
 }
 
 fn token_matches(supplied: &[u8], expected: &[u8]) -> bool {
-    if supplied.len() != expected.len() { return false; }
+    if supplied.len() != expected.len() {
+        return false;
+    }
     let mut mismatch = 0u8;
     for (&left, &right) in supplied.iter().zip(expected) {
         mismatch |= left ^ right;
@@ -211,7 +221,9 @@ async fn auth(
         .headers()
         .get(header::AUTHORIZATION)
         .is_some_and(|header| token_matches(header.as_bytes(), expected.as_bytes()));
-    if !authorized { return Err(StatusCode::UNAUTHORIZED); }
+    if !authorized {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
     Ok(next.run(request).await)
 }
 
@@ -233,7 +245,10 @@ async fn update_settings(
 
 async fn start(State(service): State<Arc<Service>>) -> Result<(StatusCode, Json<Value>), ApiError> {
     service.start().await?;
-    Ok((StatusCode::ACCEPTED, Json(json!({"ok": true, "state": "starting"}))))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({"ok": true, "state": "starting"})),
+    ))
 }
 
 async fn stop(State(service): State<Arc<Service>>) -> Json<Value> {
@@ -247,19 +262,30 @@ async fn html() -> Response {
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'"),
     );
-    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
 }
 
 async fn assets(AxumPath(filename): AxumPath<String>) -> Result<Response, StatusCode> {
     let (body, media) = match filename.as_str() {
         "app.css" => (include_str!("../assets/app.css"), "text/css; charset=utf-8"),
-        "app.js" => (include_str!("../assets/app.js"), "text/javascript; charset=utf-8"),
+        "app.js" => (
+            include_str!("../assets/app.js"),
+            "text/javascript; charset=utf-8",
+        ),
         _ => return Err(StatusCode::NOT_FOUND),
     };
     let mut response = body.to_owned().into_response();
-    response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_str(media).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?);
-    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=600"));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(media).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=600"),
+    );
     Ok(response)
 }
 
@@ -290,7 +316,11 @@ mod tests {
     }
     #[tokio::test]
     async fn crawler_is_stopped_by_default() {
-        let service = Service::new(PathBuf::from("/does-not-exist"), "secret".into(), Settings::default());
+        let service = Service::new(
+            PathBuf::from("/does-not-exist"),
+            "secret".into(),
+            Settings::default(),
+        );
         assert_eq!(service.lifecycle.lock().await.phase, Phase::Stopped);
         assert_eq!(service.status().await["running"], false);
     }

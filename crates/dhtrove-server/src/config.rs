@@ -34,15 +34,34 @@ impl Default for Settings {
 
 impl Settings {
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.udp_port == 0 { return Err("UDP port must be non-zero"); }
-        if !(1..=512).contains(&self.max_inflight_queries) { return Err("DHT concurrent queries must be 1–512"); }
-        if !(50..=60_000).contains(&self.query_interval_ms) { return Err("DHT query interval must be 50–60000 ms"); }
-        if !(1..=256).contains(&self.max_active_fetches) { return Err("Metadata workers must be 1–256"); }
-        if !(128..=200_000).contains(&self.max_queued_hashes) { return Err("Pending hash capacity must be 128–200000"); }
-        if !(1..=64).contains(&self.max_peers_per_torrent) { return Err("Peers per torrent must be 1–64"); }
-        if !(1..=16).contains(&self.metadata_limit_mb) { return Err("Metadata limit must be 1–16 MiB"); }
-        if self.checkpoint_every > 1_000_000 { return Err("Checkpoint interval must be 0–1000000"); }
-        if self.max_disk_gb.is_some_and(|gb| !(1..=1_000_000).contains(&gb)) {
+        if self.udp_port == 0 {
+            return Err("UDP port must be non-zero");
+        }
+        if !(1..=512).contains(&self.max_inflight_queries) {
+            return Err("DHT concurrent queries must be 1–512");
+        }
+        if !(50..=60_000).contains(&self.query_interval_ms) {
+            return Err("DHT query interval must be 50–60000 ms");
+        }
+        if !(1..=256).contains(&self.max_active_fetches) {
+            return Err("Metadata workers must be 1–256");
+        }
+        if !(128..=200_000).contains(&self.max_queued_hashes) {
+            return Err("Pending hash capacity must be 128–200000");
+        }
+        if !(1..=64).contains(&self.max_peers_per_torrent) {
+            return Err("Peers per torrent must be 1–64");
+        }
+        if !(1..=16).contains(&self.metadata_limit_mb) {
+            return Err("Metadata limit must be 1–16 MiB");
+        }
+        if self.checkpoint_every > 1_000_000 {
+            return Err("Checkpoint interval must be 0–1000000");
+        }
+        if self
+            .max_disk_gb
+            .is_some_and(|gb| !(1..=1_000_000).contains(&gb))
+        {
             return Err("Disk limit must be 1–1000000 GiB or empty");
         }
         Ok(())
@@ -82,7 +101,11 @@ pub fn save(path: &Path, settings: &Settings) -> io::Result<()> {
     let body = serde_json::to_vec_pretty(settings).map_err(io::Error::other)?;
     // Atomic rename prevents a crash from leaving a partially written config.
     {
-        let mut file = fs::OpenOptions::new().write(true).create(true).truncate(true).open(&tmp)?;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&tmp)?;
         use std::io::Write;
         file.write_all(&body)?;
         file.sync_all()?;
@@ -98,7 +121,11 @@ mod tests {
     fn defaults_are_valid_and_disabled_limit_is_explicit() {
         let cfg = Settings::default();
         assert!(cfg.validate().is_ok());
-        assert!(cfg.crawler(Path::new("/tmp/test")).store.max_disk_bytes.is_none());
+        assert!(cfg
+            .crawler(Path::new("/tmp/test"))
+            .store
+            .max_disk_bytes
+            .is_none());
     }
     #[test]
     fn unsafe_settings_rejected() {

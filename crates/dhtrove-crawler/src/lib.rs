@@ -10,9 +10,9 @@ use dhtrove_storage::TorrentRecord;
 use dhtrove_store::{Infohash, Store, StoreConfig, StoreError};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinSet;
@@ -100,7 +100,6 @@ impl CrawlerMetrics {
         }
     }
 }
-
 
 #[derive(Debug)]
 pub enum CrawlerError {
@@ -217,9 +216,15 @@ fn writer(
                 totals.inserted += result.inserted as u64;
                 totals.duplicates += result.skipped_duplicates as u64;
                 totals.written += result.bytes_written;
-                metrics.inserted.fetch_add(result.inserted as u64, Ordering::Relaxed);
-                metrics.duplicates.fetch_add(result.skipped_duplicates as u64, Ordering::Relaxed);
-                metrics.written.fetch_add(result.bytes_written, Ordering::Relaxed);
+                metrics
+                    .inserted
+                    .fetch_add(result.inserted as u64, Ordering::Relaxed);
+                metrics
+                    .duplicates
+                    .fetch_add(result.skipped_duplicates as u64, Ordering::Relaxed);
+                metrics
+                    .written
+                    .fetch_add(result.bytes_written, Ordering::Relaxed);
                 since_checkpoint += result.inserted;
                 if config.checkpoint_every > 0 && since_checkpoint >= config.checkpoint_every {
                     store.checkpoint()?;
@@ -353,11 +358,9 @@ impl Crawler {
 
     /// Run until the shutdown sender changes to true or drops.
     /// Network integration tests are separate from codec unit tests.
-    pub async fn run(
-        self,
-        shutdown: watch::Receiver<bool>,
-    ) -> Result<CrawlReport, CrawlerError> {
-        self.run_with_metrics(shutdown, Arc::new(CrawlerMetrics::default())).await
+    pub async fn run(self, shutdown: watch::Receiver<bool>) -> Result<CrawlReport, CrawlerError> {
+        self.run_with_metrics(shutdown, Arc::new(CrawlerMetrics::default()))
+            .await
     }
 
     pub async fn run_with_metrics(
@@ -507,9 +510,15 @@ impl Crawler {
         report.duplicates_skipped = totals.duplicates;
         report.bytes_written = totals.written;
         let dht = node.stats();
-        metrics.dht_packets.store(dht.packets_received, Ordering::Relaxed);
-        metrics.dht_queries.store(dht.queries_sent, Ordering::Relaxed);
-        metrics.verified_nodes.store(dht.verified_nodes as u64, Ordering::Relaxed);
+        metrics
+            .dht_packets
+            .store(dht.packets_received, Ordering::Relaxed);
+        metrics
+            .dht_queries
+            .store(dht.queries_sent, Ordering::Relaxed);
+        metrics
+            .verified_nodes
+            .store(dht.verified_nodes as u64, Ordering::Relaxed);
         metrics.active_fetches.store(0, Ordering::Relaxed);
         metrics.queued_hashes.store(0, Ordering::Relaxed);
         report.dht_packets = dht.packets_received;

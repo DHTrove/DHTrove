@@ -24,7 +24,9 @@ fn admin_token(directory: &std::path::Path) -> Result<String> {
     match fs::read_to_string(&path) {
         Ok(value) => {
             let token = value.trim().to_owned();
-            if token.len() < 16 { bail!("admin.token is invalid or too short"); }
+            if token.len() < 16 {
+                bail!("admin.token is invalid or too short");
+            }
             return Ok(token);
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -50,11 +52,12 @@ fn admin_token(directory: &std::path::Path) -> Result<String> {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .init();
-    let directory = PathBuf::from(
-        env::var("DHTROVE_DATA_DIR").unwrap_or_else(|_| "./dhtrove-data".into()),
-    );
+    let directory =
+        PathBuf::from(env::var("DHTROVE_DATA_DIR").unwrap_or_else(|_| "./dhtrove-data".into()));
     fs::create_dir_all(&directory).context("create data directory")?;
     let token = admin_token(&directory)?;
     let settings = config::load(&directory.join("settings.json"))?;
@@ -64,8 +67,11 @@ async fn main() -> Result<()> {
     // explicitly stopped until the user presses Start or calls POST /api/crawler/start.
     let listen: SocketAddr = env::var("DHTROVE_BIND")
         .unwrap_or_else(|_| "127.0.0.1:8080".into())
-        .parse().context("DHTROVE_BIND must be a socket address")?;
-    let listener = TcpListener::bind(listen).await.context("bind HTTP listener")?;
+        .parse()
+        .context("DHTROVE_BIND must be a socket address")?;
+    let listener = TcpListener::bind(listen)
+        .await
+        .context("bind HTTP listener")?;
     tracing::info!(address = %listener.local_addr()?, "web dashboard started; crawler is STOPPED");
 
     let shutdown_service = service.clone();
