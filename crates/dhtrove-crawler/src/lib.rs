@@ -209,7 +209,14 @@ struct FetchTask {
 
 async fn fetch_one(task: FetchTask) -> FetchResult {
     let FetchTask {
-        node, hash, peers, hints, config, max_peers, peer_id, storage,
+        node,
+        hash,
+        peers,
+        hints,
+        config,
+        max_peers,
+        peer_id,
+        storage,
     } = task;
     let (tx, rx) = oneshot::channel();
     if storage.send(Command::Exists(hash, tx)).await.is_err() {
