@@ -1,14 +1,14 @@
-use crate::config::{self, Settings};
+use crate::{auth::{Accounts, AuthError, User}, config::{self, Settings}};
 use axum::{
     extract::{DefaultBodyLimit, Path as AxumPath, Request, State},
-    http::{header, HeaderValue, StatusCode},
+    http::{header, HeaderValue, Method, StatusCode},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
+    Extension, Json, Router,
 };
 use dhtrove_crawler::{Crawler, CrawlerMetrics};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     path::PathBuf,
@@ -36,7 +36,8 @@ struct Lifecycle {
 
 pub struct Service {
     directory: PathBuf,
-    token: String,
+    accounts: Arc<Accounts>,
+    secure_cookies: bool,
     settings: RwLock<Settings>,
     lifecycle: Mutex<Lifecycle>,
 }
@@ -49,10 +50,16 @@ fn now_secs() -> u64 {
 }
 
 impl Service {
-    pub fn new(directory: PathBuf, token: String, settings: Settings) -> Arc<Self> {
+    pub fn new(
+        directory: PathBuf,
+        accounts: Arc<Accounts>,
+        secure_cookies: bool,
+        settings: Settings,
+    ) -> Arc<Self> {
         Arc::new(Self {
             directory,
-            token,
+            accounts,
+            secure_cookies,
             settings: RwLock::new(settings),
             lifecycle: Mutex::new(Lifecycle {
                 phase: Phase::Stopped,
@@ -193,6 +200,26 @@ impl ApiError {
             message: message.into(),
         }
     }
+    fn forbidden(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            message: message.into(),
+        }
+    }
+}
+
+impl From<AuthError> for ApiError {
+    fn from(error: AuthError) -> Self {
+        let status = match error {
+            AuthError::Invalid(_) => StatusCode::BAD_REQUEST,
+            AuthError::Conflict(_) => StatusCode::CONFLICT,
+            AuthError::Forbidden(_) => StatusCode::FORBIDDEN,
+            AuthError::Unauthorized => StatusCode::UNAUTHORIZED,
+            AuthError::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            AuthError::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        Self { status, message: error.to_string() }
+    }
 }
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
@@ -200,31 +227,170 @@ impl IntoResponse for ApiError {
     }
 }
 
-fn token_matches(supplied: &[u8], expected: &[u8]) -> bool {
-    if supplied.len() != expected.len() {
-        return false;
-    }
-    let mut mismatch = 0u8;
-    for (&left, &right) in supplied.iter().zip(expected) {
-        mismatch |= left ^ right;
-    }
-    mismatch == 0
+const COOKIE_NAME: &str = "dhtrove_session";
+
+fn cookie_token(headers: &axum::http::HeaderMap) -> Option<&str> {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|header| header.split(';'))
+        .filter_map(|part| part.trim().split_once('='))
+        .find(|(key, _)| *key == COOKIE_NAME)
+        .map(|(_, value)| value)
+}
+
+fn session_cookie(token: &str, secure: bool) -> HeaderValue {
+    let secure_flag = if secure { "; Secure" } else { "" };
+    HeaderValue::from_str(&format!(
+        "{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=604800{secure_flag}"
+    ))
+    .expect("session tokens have only hexadecimal characters")
+}
+
+fn cleared_cookie(secure: bool) -> HeaderValue {
+    let secure_flag = if secure { "; Secure" } else { "" };
+    HeaderValue::from_str(&format!(
+        "{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0{secure_flag}"
+    ))
+    .expect("static cleared cookie is valid")
+}
+
+async fn account_operation<T, F>(operation: F) -> Result<T, ApiError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, AuthError> + Send + 'static,
+{
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .map_err(ApiError::from)
+}
+
+fn require_admin(user: &User) -> Result<(), ApiError> {
+    if user.is_admin { Ok(()) }
+    else { Err(ApiError::forbidden("Administrator access required")) }
 }
 
 async fn auth(
     State(service): State<Arc<Service>>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let expected = format!("Bearer {}", service.token);
-    let authorized = request
-        .headers()
-        .get(header::AUTHORIZATION)
-        .is_some_and(|header| token_matches(header.as_bytes(), expected.as_bytes()));
-    if !authorized {
-        return Err(StatusCode::UNAUTHORIZED);
+    // SameSite=Strict and a custom header protect state-changing requests
+    // from cross-site form posts; browsers preflight cross-origin JS.
+    if !matches!(*request.method(), Method::GET | Method::HEAD)
+        && request.headers().get("x-dhtrove-request").is_none_or(|value| value != "1")
+    {
+        return Err(StatusCode::FORBIDDEN);
     }
+    let Some(token) = cookie_token(request.headers()) else {
+        return Err(StatusCode::UNAUTHORIZED);
+    };
+    let token = token.to_owned();
+    let accounts = service.accounts.clone();
+    let principal = account_operation(move || accounts.current_user(&token))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    request.extensions_mut().insert(principal);
     Ok(next.run(request).await)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Credentials {
+    username: String,
+    password: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RegistrationOption {
+    enabled: bool,
+}
+
+async fn setup(State(service): State<Arc<Service>>) -> Result<Json<Value>, ApiError> {
+    let accounts = service.accounts.clone();
+    let (needs_setup, registration_enabled) = account_operation(move || {
+        Ok((accounts.setup_required()?, accounts.registration_open()?))
+    }).await?;
+    Ok(Json(json!({
+        "needs_setup": needs_setup,
+        "registration_enabled": registration_enabled
+    })))
+}
+
+async fn register(
+    State(service): State<Arc<Service>>,
+    Json(body): Json<Credentials>,
+) -> Result<Response, ApiError> {
+    let accounts = service.accounts.clone();
+    let (user, token) = account_operation(move || {
+        let user = accounts.register(&body.username, &body.password)?;
+        let token = accounts.create_session(user.id)?;
+        Ok((user, token))
+    }).await?;
+    let mut response = (StatusCode::CREATED, Json(json!({"user": user}))).into_response();
+    response.headers_mut().insert(header::SET_COOKIE, session_cookie(&token, service.secure_cookies));
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+async fn login(
+    State(service): State<Arc<Service>>,
+    Json(body): Json<Credentials>,
+) -> Result<Response, ApiError> {
+    let accounts = service.accounts.clone();
+    let (user, token) = account_operation(move || {
+        let user = accounts.login(&body.username, &body.password)?;
+        let token = accounts.create_session(user.id)?;
+        Ok((user, token))
+    }).await?;
+    let mut response = Json(json!({"user": user})).into_response();
+    response.headers_mut().insert(header::SET_COOKIE, session_cookie(&token, service.secure_cookies));
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+async fn me(Extension(user): Extension<User>) -> Json<Value> {
+    Json(json!({"user": user}))
+}
+
+async fn logout(
+    State(service): State<Arc<Service>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, ApiError> {
+    if let Some(token) = cookie_token(&headers) {
+        let accounts = service.accounts.clone();
+        let token = token.to_owned();
+        account_operation(move || accounts.revoke_session(&token)).await?;
+    }
+    let mut response = Json(json!({"ok": true})).into_response();
+    response.headers_mut().insert(header::SET_COOKIE, cleared_cookie(service.secure_cookies));
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+async fn users(
+    State(service): State<Arc<Service>>,
+    Extension(principal): Extension<User>,
+) -> Result<Json<Value>, ApiError> {
+    require_admin(&principal)?;
+    let accounts = service.accounts.clone();
+    let members = account_operation(move || accounts.users()).await?;
+    Ok(Json(json!({"users": members})))
+}
+
+async fn update_registration(
+    State(service): State<Arc<Service>>,
+    Extension(principal): Extension<User>,
+    Json(body): Json<RegistrationOption>,
+) -> Result<Json<Value>, ApiError> {
+    require_admin(&principal)?;
+    let accounts = service.accounts.clone();
+    account_operation(move || accounts.set_registration(body.enabled)).await?;
+    Ok(Json(json!({"registration_enabled": body.enabled})))
 }
 
 async fn status(State(service): State<Arc<Service>>) -> Json<Value> {
@@ -237,13 +403,19 @@ async fn settings(State(service): State<Arc<Service>>) -> Json<Settings> {
 
 async fn update_settings(
     State(service): State<Arc<Service>>,
+    Extension(principal): Extension<User>,
     Json(incoming): Json<Settings>,
 ) -> Result<Json<Value>, ApiError> {
+    require_admin(&principal)?;
     service.save_settings(incoming).await?;
     Ok(Json(json!({"ok": true})))
 }
 
-async fn start(State(service): State<Arc<Service>>) -> Result<(StatusCode, Json<Value>), ApiError> {
+async fn start(
+    State(service): State<Arc<Service>>,
+    Extension(principal): Extension<User>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    require_admin(&principal)?;
     service.start().await?;
     Ok((
         StatusCode::ACCEPTED,
@@ -251,9 +423,13 @@ async fn start(State(service): State<Arc<Service>>) -> Result<(StatusCode, Json<
     ))
 }
 
-async fn stop(State(service): State<Arc<Service>>) -> Json<Value> {
+async fn stop(
+    State(service): State<Arc<Service>>,
+    Extension(principal): Extension<User>,
+) -> Result<Json<Value>, ApiError> {
+    require_admin(&principal)?;
     service.stop().await;
-    Json(json!({"ok": true, "state": "stopping"}))
+    Ok(Json(json!({"ok": true, "state": "stopping"})))
 }
 
 async fn html() -> Response {
@@ -290,92 +466,149 @@ async fn assets(AxumPath(filename): AxumPath<String>) -> Result<Response, Status
 }
 
 pub fn router(service: Arc<Service>) -> Router {
-    let api = Router::new()
+    let protected = Router::new()
+        .route("/auth/me", get(me))
+        .route("/auth/logout", post(logout))
         .route("/status", get(status))
         .route("/settings", get(settings).put(update_settings))
         .route("/crawler/start", post(start))
         .route("/crawler/stop", post(stop))
+        .route("/admin/users", get(users))
+        .route("/admin/registration", post(update_registration))
         .layer(DefaultBodyLimit::max(8 * 1024))
         .route_layer(middleware::from_fn_with_state(service.clone(), auth));
+
+    let public = Router::new()
+        .route("/auth/setup", get(setup))
+        .route("/auth/register", post(register))
+        .route("/auth/login", post(login))
+        .layer(DefaultBodyLimit::max(4 * 1024));
+
     Router::new()
         .route("/", get(html))
         .route("/assets/:filename", get(assets))
         .route("/healthz", get(|| async { StatusCode::OK }))
-        .nest("/api", api)
+        .nest("/api", protected.merge(public))
         .with_state(service)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn token_check_does_not_accept_prefixes() {
-        assert!(token_matches(b"secret", b"secret"));
-        assert!(!token_matches(b"sec", b"secret"));
-        assert!(!token_matches(b"other!", b"secret"));
+    use axum::body::{to_bytes, Body};
+    use axum::http::Request;
+    use tempfile::tempdir;
+    use tower::ServiceExt;
+
+    fn service(dir: &std::path::Path) -> Arc<Service> {
+        let accounts = Arc::new(Accounts::open(dir).unwrap());
+        Service::new(dir.to_path_buf(), accounts, false, Settings::default())
     }
+
+    async fn call(router: Router, method: &str, uri: &str, body: Value, cookie: Option<&str>) -> Response {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("x-dhtrove-request", "1")
+            .header("content-type", "application/json");
+        if let Some(value) = cookie {
+            request = request.header(header::COOKIE, value);
+        }
+        router.oneshot(request.body(Body::from(body.to_string())).unwrap()).await.unwrap()
+    }
+
+    async fn json(response: Response) -> Value {
+        let body = to_bytes(response.into_body(), 64_000).await.unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    fn cookie(response: &Response) -> String {
+        response.headers()[header::SET_COOKIE]
+            .to_str().unwrap().split(';').next().unwrap().to_owned()
+    }
+
     #[tokio::test]
-    async fn api_requires_token_and_reports_stopped() {
-        use axum::body::{to_bytes, Body};
-        use axum::http::Request;
-        use tower::ServiceExt;
+    async fn first_setup_admin_then_regular_account_and_role_checks() {
+        let dir = tempdir().unwrap();
+        let routes = router(service(dir.path()));
+        let setup = call(routes.clone(), "GET", "/api/auth/setup", json!({}), None).await;
+        assert_eq!(json(setup).await["needs_setup"], true);
 
-        let service = Service::new(
-            PathBuf::from("/unused"),
-            "test-api-secret-token".into(),
-            Settings::default(),
-        );
-        let routes = router(service);
-        let unauthorized = routes
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/status")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let forbidden = call(routes.clone(), "GET", "/api/status", json!({}), None).await;
+        assert_eq!(forbidden.status(), StatusCode::UNAUTHORIZED);
 
-        let authorized = routes
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/status")
-                    .header(header::AUTHORIZATION, "Bearer test-api-secret-token")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(authorized.status(), StatusCode::OK);
-        let body = to_bytes(authorized.into_body(), 16_384).await.unwrap();
-        let value: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["phase"], "stopped");
-        assert_eq!(value["metrics"]["dht_queries"], 0);
+        let first = call(routes.clone(), "POST", "/api/auth/register",
+            json!({"username":"Owner", "password":"a-strong-admin-password"}), None).await;
+        assert_eq!(first.status(), StatusCode::CREATED);
+        let admin_cookie = cookie(&first);
+        assert_eq!(json(first).await["user"]["is_admin"], true);
 
-        let response = routes
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/crawler/stop")
-                    .header(header::AUTHORIZATION, "Bearer test-api-secret-token")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+        let second = call(routes.clone(), "POST", "/api/auth/register",
+            json!({"username":"viewer", "password":"a-strong-user-password"}), None).await;
+        assert_eq!(second.status(), StatusCode::CREATED);
+        let viewer_cookie = cookie(&second);
+        assert_eq!(json(second).await["user"]["is_admin"], false);
+
+        let member = call(routes.clone(), "POST", "/api/crawler/start", json!({}), Some(&viewer_cookie)).await;
+        assert_eq!(member.status(), StatusCode::FORBIDDEN);
+        let member = call(routes.clone(), "PUT", "/api/settings", json!({}), Some(&viewer_cookie)).await;
+        assert_eq!(member.status(), StatusCode::FORBIDDEN);
+
+        let admin = call(routes.clone(), "GET", "/api/admin/users", json!({}), Some(&admin_cookie)).await;
+        assert_eq!(admin.status(), StatusCode::OK);
+        assert_eq!(json(admin).await["users"].as_array().unwrap().len(), 2);
+
+        let disable = call(routes.clone(), "POST", "/api/admin/registration",
+            json!({"enabled":false}), Some(&admin_cookie)).await;
+        assert_eq!(disable.status(), StatusCode::OK);
+        let third = call(routes.clone(), "POST", "/api/auth/register",
+            json!({"username":"third", "password":"a-strong-user-password"}), None).await;
+        assert_eq!(third.status(), StatusCode::FORBIDDEN);
+
+        let stopped = call(routes.clone(), "GET", "/api/status", json!({}), Some(&viewer_cookie)).await;
+        assert_eq!(json(stopped).await["phase"], "stopped");
+        let logout = call(routes.clone(), "POST", "/api/auth/logout", json!({}), Some(&viewer_cookie)).await;
+        assert_eq!(logout.status(), StatusCode::OK);
+        let invalid = call(routes, "GET", "/api/status", json!({}), Some(&viewer_cookie)).await;
+        assert_eq!(invalid.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn login_and_cookies_survive_restart() {
+        let dir = tempdir().unwrap();
+        let routes = router(service(dir.path()));
+        let first = call(routes.clone(), "POST", "/api/auth/register",
+            json!({"username":"owner", "password":"very-long-password"}), None).await;
+        assert_eq!(first.status(), StatusCode::CREATED);
+        let bad = call(routes.clone(), "POST", "/api/auth/login",
+            json!({"username":"owner", "password":"incorrect-password"}), None).await;
+        assert_eq!(bad.status(), StatusCode::UNAUTHORIZED);
+        let good = call(routes, "POST", "/api/auth/login",
+            json!({"username":"owner", "password":"very-long-password"}), None).await;
+        assert_eq!(good.status(), StatusCode::OK);
+        let session = cookie(&good);
+        let restarted = router(service(dir.path()));
+        let me = call(restarted, "GET", "/api/auth/me", json!({}), Some(&session)).await;
+        assert_eq!(json(me).await["user"]["is_admin"], true);
+    }
+
+    #[tokio::test]
+    async fn mutating_requests_require_custom_header() {
+        let dir = tempdir().unwrap();
+        let routes = router(service(dir.path()));
+        let response = routes.oneshot(
+            Request::builder().method("POST").uri("/api/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"username":"foo","password":"abcdefgh123456"}"#)).unwrap()
+        ).await.unwrap();
+        // Login is a public JSON-only endpoint; no cookie or admin controls.
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
     async fn crawler_is_stopped_by_default() {
-        let service = Service::new(
-            PathBuf::from("/does-not-exist"),
-            "secret".into(),
-            Settings::default(),
-        );
+        let dir = tempdir().unwrap();
+        let service = service(dir.path());
         assert_eq!(service.lifecycle.lock().await.phase, Phase::Stopped);
         assert_eq!(service.status().await["running"], false);
     }

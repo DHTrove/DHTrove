@@ -25,6 +25,8 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test codecs
         run: cargo test --workspace --all-targets
+      - name: Check browser JavaScript syntax
+        run: node --check crates/dhtrove-server/assets/app.js
 
   benchmark:
     name: Storage codec comparison

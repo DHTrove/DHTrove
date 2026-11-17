@@ -10,8 +10,8 @@ services:
       DHTROVE_DATA_DIR: /data
       DHTROVE_BIND: 0.0.0.0:8080
       RUST_LOG: info
-      # Optional. Without it, a random token is created in /data/admin.token.
-      DHTROVE_API_TOKEN: ${DHTROVE_API_TOKEN:-}
+      # Set to true only when browser access uses HTTPS (e.g. TLS proxy).
+      DHTROVE_SECURE_COOKIES: ${DHTROVE_SECURE_COOKIES:-false}
     ports:
       # Keep API local unless deliberately protected behind a reverse proxy.
       - "127.0.0.1:8080:8080/tcp"
