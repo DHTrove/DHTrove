@@ -262,7 +262,7 @@ impl Accounts {
         })
     }
 
-    fn record_failed(&self, username: &str) -> Result<(), AuthError> {
+    fn record_failed(&self, username: &str) -> AuthError {
         let mut failures = self
             .failed_attempts
             .lock()
@@ -284,11 +284,11 @@ impl Accounts {
             entry.count = 0;
         }
         entry.count = entry.count.saturating_add(1);
-        Err(if entry.count >= MAX_FAILED_ATTEMPTS {
+        if entry.count >= MAX_FAILED_ATTEMPTS {
             AuthError::RateLimited
         } else {
             AuthError::Unauthorized
-        })
+        }
     }
 
     pub fn login(&self, username: &str, password: &str) -> Result<User, AuthError> {
@@ -324,7 +324,7 @@ impl Accounts {
             .as_ref()
             .map_or(self.dummy_hash.as_str(), |record| record.3.as_str());
         if !verify_password(password, hash) {
-            return self.record_failed(&username);
+            return Err(self.record_failed(&username));
         }
         let (id, username, is_admin, _) = account.ok_or(AuthError::Unauthorized)?;
         self.failed_attempts
