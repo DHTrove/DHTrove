@@ -7,9 +7,9 @@ of bitmagnet. Its primary objective is minimizing the **total disk footprint**
 of a large BitTorrent metadata index without sacrificing lossless metadata or
 searchability. This is **not** a fork of bitmagnet.
 
-> **Status: experimental development.** Compact storage is implemented; a
-> library-based IPv4 BEP 5/51 DHT crawler and BEP 9 metadata fetcher are under
-> development. No production release, web UI or Torznab API exists yet.
+> **Status: early release.** DHTrove now includes a headless service, Docker
+> packaging and an authenticated web dashboard. Public-DHT performance testing,
+> full-text search and the Torznab API are still future work.
 
 ## Implemented
 
@@ -36,6 +36,7 @@ searchability. This is **not** a fork of bitmagnet.
 - `crates/dhtrove-dht` — async UDP node and iterative DHT discovery.
 - `crates/dhtrove-metadata` — metadata-only TCP peer exchange and parsing.
 - `crates/dhtrove-crawler` — bounded scheduling and persistent ingestion.
+- `crates/dhtrove-server` — headless service, HTTP API and web dashboard.
 - `docs/storage-format.md` — block codec prototype.
 - `docs/persistence.md` — disk format, API, recovery and limitations.
 - `docs/checkpoints.md` — index checkpoint format, replay and quota behavior.
@@ -43,6 +44,20 @@ searchability. This is **not** a fork of bitmagnet.
 - `docs/compaction.md` — atomic generation switching and space reclamation.
 - `docs/packed-index.md` — compact in-memory infohash index and tradeoffs.
 - `docs/dht-crawler.md` — DHT traversal, metadata fetch and embedding.
+- `docs/deployment.md` — Docker, manual start/stop, credentials and releases.
+
+## Docker
+
+Use the included Compose file to run a local web dashboard:
+
+    docker compose up -d
+    docker exec dhtrove cat /data/admin.token
+
+Open http://localhost:8080, enter the token, and press **Start crawler**
+when indexing is needed. The crawler is **stopped by default**, including
+after container restarts. The panel stays available after you stop it.
+
+Full documentation: [Deployment and operation](docs/deployment.md).
 
 ## Run on a development machine
 
@@ -70,7 +85,7 @@ servers are not used for builds or tests.
 2. Validate compaction at scale and improve memory efficiency; physical disk quotas.
 3. Real representative dataset benchmarks and tuning adaptive codecs/block sizes.
 4. Public-network interoperability/throughput and multi-million record tests.
-5. IPv6 DHT, discovery improvements, search, Torznab/API, web UI and packaging.
+5. IPv6 DHT, persistent discovery queue, full-text search, Torznab/API and web enhancements.
 
 See the [persistence design](docs/persistence.md) and
 [codec format](docs/storage-format.md).

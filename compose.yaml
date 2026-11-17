@@ -1,0 +1,22 @@
+name: dhtrove
+services:
+  dhtrove:
+    image: ghcr.io/dhtrove/dhtrove:latest
+    container_name: dhtrove
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 45s
+    environment:
+      DHTROVE_DATA_DIR: /data
+      DHTROVE_BIND: 0.0.0.0:8080
+      RUST_LOG: info
+      # Optional. Without it, a random token is created in /data/admin.token.
+      DHTROVE_API_TOKEN: ${DHTROVE_API_TOKEN:-}
+    ports:
+      # Keep API local unless deliberately protected behind a reverse proxy.
+      - "127.0.0.1:8080:8080/tcp"
+      - "6881:6881/udp"
+    volumes:
+      - dhtrove-data:/data
+volumes:
+  dhtrove-data:

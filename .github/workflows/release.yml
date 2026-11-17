@@ -1,0 +1,140 @@
+name: Release
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.toml"
+      - "crates/**"
+      - "Dockerfile"
+      - "compose.yaml"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: dhtrove-release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      publish: ${{ steps.check.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check package version and existing release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(sed -n 's/^version = "\([^"]*\)"$/\1/p' crates/dhtrove-server/Cargo.toml | head -1)
+          test -n "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Release v$VERSION already exists; bump package version for a new release."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  validate:
+    needs: version
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace --all-targets
+
+  binaries:
+    needs: [version, validate]
+    if: needs.version.outputs.publish == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            suffix: linux-x86_64
+          - os: windows-latest
+            suffix: windows-x86_64
+          - os: macos-15
+            suffix: macos-aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Compile headless dashboard binary
+        run: cargo build --release -p dhtrove-server
+      - name: Package Unix executable
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          tar -czf "dist/dhtrove-${{ needs.version.outputs.version }}-${{ matrix.suffix }}.tar.gz" -C target/release dhtrove
+      - name: Package Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -Type Directory -Path dist -Force
+          Compress-Archive -Path target/release/dhtrove.exe -DestinationPath "dist/dhtrove-${{ needs.version.outputs.version }}-${{ matrix.suffix }}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.suffix }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+  docker:
+    needs: [version, validate]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/dhtrove/dhtrove:v${{ needs.version.outputs.version }}
+            ghcr.io/dhtrove/dhtrove:${{ needs.version.outputs.version }}
+            ghcr.io/dhtrove/dhtrove:latest
+
+  release:
+    needs: [version, binaries, docker]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          merge-multiple: true
+          path: dist
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ needs.version.outputs.version }}" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "DHTrove v${{ needs.version.outputs.version }}" \
+            --generate-notes \
+            --latest
