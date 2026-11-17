@@ -1,0 +1,12 @@
+[package]
+name = "dhtrove-dht"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Bounded BitTorrent Mainline DHT BEP 5/51 UDP node"
+
+[dependencies]
+tokio = { version = "1.42", features = ["net", "sync", "time", "rt", "macros"] }
+rand = "0.8"
+sha1 = "0.10"

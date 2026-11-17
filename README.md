@@ -7,8 +7,9 @@ of bitmagnet. Its primary objective is minimizing the **total disk footprint**
 of a large BitTorrent metadata index without sacrificing lossless metadata or
 searchability. This is **not** a fork of bitmagnet.
 
-> **Status: early prototype.** The block codecs and a persistent append-only
-> segment store are implemented. DHT discovery, search, API and web UI are not.
+> **Status: experimental development.** Compact storage is implemented; a
+> library-based IPv4 BEP 5/51 DHT crawler and BEP 9 metadata fetcher are under
+> development. No production release, web UI or Torznab API exists yet.
 
 ## Implemented
 
@@ -22,6 +23,8 @@ searchability. This is **not** a fork of bitmagnet.
   overlay and Zstd checkpoints; hybrid hashes share the same torrent metadata.
 - Exclusive writer lock, durable tombstone deletion, and crash-safe segment
   compaction with an atomic active-segment manifest.
+- IPv4 DHT networking (BEP 5 and BEP 51 sampling) and metadata-only TCP peer
+  exchange (BEP 9/10), integrated through a bounded headless crawler library.
 - GitHub Actions runs formatting, Clippy, round-trip and crash-recovery tests,
   plus reproducible synthetic compression benchmarks.
 
@@ -30,12 +33,16 @@ searchability. This is **not** a fork of bitmagnet.
 - `crates/dhtrove-storage` — lossless block codecs.
 - `crates/dhtrove-store` — append-only persistence and infohash lookup.
 - `crates/dhtrove-bench` — deterministic compression benchmark.
+- `crates/dhtrove-dht` — async UDP node and iterative DHT discovery.
+- `crates/dhtrove-metadata` — metadata-only TCP peer exchange and parsing.
+- `crates/dhtrove-crawler` — bounded scheduling and persistent ingestion.
 - `docs/storage-format.md` — block codec prototype.
 - `docs/persistence.md` — disk format, API, recovery and limitations.
 - `docs/checkpoints.md` — index checkpoint format, replay and quota behavior.
 - `docs/deletions.md` — tombstone framing and replay.
 - `docs/compaction.md` — atomic generation switching and space reclamation.
 - `docs/packed-index.md` — compact in-memory infohash index and tradeoffs.
+- `docs/dht-crawler.md` — DHT traversal, metadata fetch and embedding.
 
 ## Run on a development machine
 
@@ -62,8 +69,8 @@ servers are not used for builds or tests.
 1. Benchmark total index RAM, search latency and checkpoint load time on real data.
 2. Validate compaction at scale and improve memory efficiency; physical disk quotas.
 3. Real representative dataset benchmarks and tuning adaptive codecs/block sizes.
-4. DHT discovery, peer metadata retrieval and deduplication.
-5. Search, Torznab/API, web interface, Docker and production tooling.
+4. Public-network interoperability/throughput and multi-million record tests.
+5. IPv6 DHT, discovery improvements, search, Torznab/API, web UI and packaging.
 
 See the [persistence design](docs/persistence.md) and
 [codec format](docs/storage-format.md).

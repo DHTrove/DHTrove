@@ -325,6 +325,12 @@ impl Store {
         Ok(size)
     }
 
+    /// Lightweight O(log N) (frozen) / expected O(1) (overlay) existence
+    /// check without reading or decompressing an on-disk metadata block.
+    pub fn contains_hash(&self, hash: &Infohash) -> bool {
+        self.index.contains_key(hash)
+    }
+
     pub fn get(&self, hash: &Infohash) -> Result<Option<TorrentRecord>, StoreError> {
         let Some(location) = self.index.get(hash) else {
             return Ok(None);
