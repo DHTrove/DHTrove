@@ -68,8 +68,10 @@ impl Settings {
     }
 
     pub fn crawler(&self, directory: &Path) -> CrawlerConfig {
-        let mut config = CrawlerConfig::default();
-        config.store_path = directory.join("store");
+        let mut config = CrawlerConfig {
+            store_path: directory.join("store"),
+            ..CrawlerConfig::default()
+        };
         config.dht.bind.set_port(self.udp_port);
         config.dht.max_inflight_queries = self.max_inflight_queries;
         config.dht.query_interval = std::time::Duration::from_millis(self.query_interval_ms);
@@ -129,8 +131,10 @@ mod tests {
     }
     #[test]
     fn unsafe_settings_rejected() {
-        let mut cfg = Settings::default();
-        cfg.max_active_fetches = 0;
+        let cfg = Settings {
+            max_active_fetches: 0,
+            ..Settings::default()
+        };
         assert!(cfg.validate().is_err());
     }
 }
