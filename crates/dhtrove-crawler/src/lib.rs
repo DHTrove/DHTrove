@@ -207,6 +207,32 @@ struct FetchTask {
     storage: mpsc::Sender<Command>,
 }
 
+/// Try a few metadata peers in parallel. Stop on the first verified infohash,
+/// and cancel losing connections rather than waiting for serial timeouts.
+async fn try_peers(
+    addresses: Vec<std::net::SocketAddrV4>,
+    hash: Id,
+    peer_id: [u8; 20],
+    config: FetchConfig,
+) -> Option<TorrentRecord> {
+    let mut queue: VecDeque<_> = addresses.into_iter().collect();
+    let mut in_flight = JoinSet::new();
+    while !queue.is_empty() || !in_flight.is_empty() {
+        while in_flight.len() < 3 {
+            let Some(peer) = queue.pop_front() else { break };
+            in_flight.spawn(async move { peer::fetch(peer, hash, peer_id, config).await });
+        }
+        let Some(result) = in_flight.join_next().await else {
+            break;
+        };
+        if let Ok(Ok(record)) = result {
+            in_flight.abort_all();
+            return Some(record);
+        }
+    }
+    None
+}
+
 async fn fetch_one(task: FetchTask) -> FetchResult {
     let FetchTask {
         node,
@@ -218,6 +244,7 @@ async fn fetch_one(task: FetchTask) -> FetchResult {
         peer_id,
         storage,
     } = task;
+
     let (tx, rx) = oneshot::channel();
     if storage.send(Command::Exists(hash, tx)).await.is_err() {
         return FetchResult::Failed(hash);
@@ -226,24 +253,35 @@ async fn fetch_one(task: FetchTask) -> FetchResult {
         return FetchResult::Existing(hash);
     }
 
-    let mut addresses = peers;
-    if addresses.len() < max_peers {
-        for peer in node.find_peers(hash, &hints).await {
-            if !addresses.contains(&peer) {
-                addresses.push(peer);
-            }
-            if addresses.len() >= max_peers {
-                break;
-            }
-        }
+    let mut tried = HashSet::new();
+    let direct: Vec<_> = peers
+        .into_iter()
+        .filter(|peer| tried.insert(*peer))
+        .take(max_peers)
+        .collect();
+    // Announce-derived peers should be attempted immediately; there is no
+    // reason to wait for a full get_peers lookup when a candidate is ready.
+    if let Some(record) = try_peers(direct, hash, peer_id, config).await {
+        return if storage.send(Command::Insert(record)).await.is_ok() {
+            FetchResult::Fetched(hash)
+        } else {
+            FetchResult::Failed(hash)
+        };
     }
-    for peer in addresses.into_iter().take(max_peers) {
-        if let Ok(record) = peer::fetch(peer, hash, peer_id, config).await {
-            if storage.send(Command::Insert(record)).await.is_ok() {
-                return FetchResult::Fetched(hash);
-            }
-            break;
-        }
+
+    let discovered: Vec<_> = node
+        .find_peers(hash, &hints)
+        .await
+        .into_iter()
+        .filter(|peer| tried.insert(*peer))
+        .take(max_peers)
+        .collect();
+    if let Some(record) = try_peers(discovered, hash, peer_id, config).await {
+        return if storage.send(Command::Insert(record)).await.is_ok() {
+            FetchResult::Fetched(hash)
+        } else {
+            FetchResult::Failed(hash)
+        };
     }
     FetchResult::Failed(hash)
 }
