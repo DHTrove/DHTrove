@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#111017"><meta name="color-scheme" content="dark">
+<title>DHTrove · Control center</title>
+<link rel="stylesheet" href="/assets/app.css"><script src="/assets/app.js" defer></script>
+</head>
+<body>
+<div class="shell">
+<aside class="sidebar">
+  <div class="brand"><div class="brand-mark">D</div><span>DHTrove<small>INDEXING SYSTEM</small></span></div>
+  <nav aria-label="Primary navigation">
+    <button class="nav-item active" data-view="overview"><span class="nav-icon">◫</span> Overview</button>
+    <button class="nav-item" data-view="settings"><span class="nav-icon">⚙</span> Settings</button>
+  </nav>
+  <div class="side-footer">
+    <div class="mini-label">ENGINE</div>
+    <div class="engine-state"><i id="side-light" class="dot"></i><span id="side-state">Stopped</span></div>
+    <small id="version">DHTrove</small>
+  </div>
+</aside>
+<main class="main">
+<header class="topbar"><div class="breadcrumbs">System <span>/</span> <strong id="breadcrumb">Overview</strong></div><span class="last-sync"><i></i><span id="last-sync">Connecting…</span></span></header>
+<section id="overview" class="view">
+  <div class="heading">
+    <div><div class="eyebrow">DHT / CONTROL CENTER</div><h1>Crawler overview</h1><p>Metadata discovery and indexing, on your terms.</p></div>
+    <div class="actions"><button class="btn outline" id="stop" disabled>Stop crawler</button><button class="btn primary" id="start" disabled>▶ &nbsp; Start crawler</button></div>
+  </div>
+  <div class="status-box"><div class="status-left"><div class="status-symbol"><i id="status-light" class="dot"></i></div><div><div class="mini-label">CRAWLER STATUS</div><h2 id="status-title">Stopped</h2><p id="status-message">Discovery is not running. Start it whenever you need.</p></div></div><div class="uptime"><div class="mini-label">UPTIME</div><strong id="uptime">—</strong></div></div>
+  <div id="crawler-error" class="error hidden" role="alert"></div>
+  <div class="section-caption"><h3>Activity</h3><span>Current session</span></div>
+  <div class="stat-grid">
+    <div class="stat"><span>Discovered hashes</span><strong id="sightings">0</strong><small>DHT observations</small></div>
+    <div class="stat"><span>Metadata saved</span><strong id="records_inserted">0</strong><small>New database entries</small></div>
+    <div class="stat"><span>Verified DHT nodes</span><strong id="verified_nodes">0</strong><small>Routing table</small></div>
+    <div class="stat"><span>Pending hashes</span><strong id="queued_hashes">0</strong><small>Waiting for processing</small></div>
+  </div>
+  <div class="detail-grid">
+    <article class="detail-card">
+      <div class="card-title"><div><h3>Network activity</h3><p>Incoming UDP packets, recent activity</p></div><span class="tag">DHT / IPv4</span></div>
+      <div class="chart"><svg viewBox="0 0 560 116" preserveAspectRatio="none" aria-label="Recent UDP packet rate"><polyline id="graph-line" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" points=""></polyline></svg></div>
+      <div class="detail-row"><span>Packets received</span><strong id="dht_packets">0</strong></div>
+      <div class="detail-row"><span>Outgoing DHT queries</span><strong id="dht_queries">0</strong></div>
+      <div class="detail-row"><span>Active metadata jobs</span><strong id="active_fetches">0</strong></div>
+    </article>
+    <article class="detail-card">
+      <div class="card-title"><div><h3>Storage</h3><p>Metadata ingestion statistics</p></div><span class="tag">LOSSLESS</span></div>
+      <div class="storage-rows">
+        <div class="detail-row"><span>Metadata fetched</span><strong id="metadata_fetched">0</strong></div>
+        <div class="detail-row"><span>Duplicates skipped</span><strong id="duplicates_skipped">0</strong></div>
+        <div class="detail-row"><span>Fetch failures</span><strong id="fetch_failures">0</strong></div>
+        <div class="detail-row"><span>Written this session</span><strong id="bytes_written">0 B</strong></div>
+      </div>
+      <p class="footnote">The database persists when indexing stops. Activity counters reset for each new run.</p>
+    </article>
+  </div>
+  <div class="tip"><span class="tip-mark">i</span><p><strong>Manual operation.</strong> Starting the container or opening the dashboard does not activate DHT discovery. Press <b>Start crawler</b> to begin, and stop indexing whenever you wish without interrupting the dashboard.</p></div>
+</section>
+<section id="settings" class="view hidden">
+  <div class="heading"><div><div class="eyebrow">ENGINE / CONFIGURATION</div><h1>Settings</h1><p>Adjust network workload and disk limits. Changes apply on the next start.</p></div></div>
+  <form id="settings-form">
+    <div class="form-section"><h3>Discovery &amp; network</h3><div class="fields">
+      <label>UDP port<small>DHT listening port inside the container</small><input name="udp_port" type="number" min="1" max="65535" required></label>
+      <label>Concurrent DHT queries<small>Maximum in-flight UDP requests</small><input name="max_inflight_queries" type="number" min="1" max="512" required></label>
+      <label>Query interval (ms)<small>Time between discovery queries</small><input name="query_interval_ms" type="number" min="50" max="60000" required></label>
+      <label>Parallel metadata jobs<small>Maximum simultaneous torrent tasks</small><input name="max_active_fetches" type="number" min="1" max="256" required></label>
+      <label>Queued infohash limit<small>Maximum in-memory discovery queue</small><input name="max_queued_hashes" type="number" min="128" max="200000" required></label>
+      <label>Peers per torrent<small>Maximum peer candidates</small><input name="max_peers_per_torrent" type="number" min="1" max="64" required></label>
+    </div></div>
+    <div class="form-section"><h3>Storage &amp; limits</h3><div class="fields">
+      <label>Metadata limit (MiB)<small>Maximum single torrent info size</small><input name="metadata_limit_mb" type="number" min="1" max="16" required></label>
+      <label>Checkpoint interval<small>New records before checkpoint; zero disables</small><input name="checkpoint_every" type="number" min="0" max="1000000" required></label>
+      <label>Disk limit (GiB)<small>Leave blank for unlimited logical storage</small><input name="max_disk_gb" type="number" min="1" max="1000000" placeholder="Unlimited"></label>
+    </div></div>
+    <div class="form-bottom"><span id="form-help">The crawler must be stopped before changing settings.</span><button id="save" type="submit" class="btn primary">Save settings</button></div>
+  </form>
+</section>
+</main>
+</div>
+<div id="auth" class="auth-overlay">
+  <form id="auth-form" class="auth-dialog">
+    <div class="brand-mark">D</div><div class="eyebrow">SECURE ACCESS</div><h2>Connect to DHTrove</h2>
+    <p>Enter the dashboard API token. It is retained only in this browser tab.</p>
+    <label for="token">API token</label><input id="token" type="password" spellcheck="false" autocomplete="off" placeholder="Paste your API token" required>
+    <p class="token-hint">Docker: <code>docker exec dhtrove cat /data/admin.token</code></p>
+    <div id="auth-error" class="auth-error" role="alert"></div><button class="btn primary wide" type="submit">Connect</button>
+  </form>
+</div>
+<div id="toast" class="toast hidden" role="status"></div>
+</body>
+</html>

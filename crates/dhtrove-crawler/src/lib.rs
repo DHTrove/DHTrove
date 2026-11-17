@@ -11,6 +11,8 @@ use dhtrove_store::{Infohash, Store, StoreConfig, StoreError};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinSet;
@@ -58,6 +60,45 @@ pub struct CrawlReport {
     pub duplicates_skipped: u64,
     pub bytes_written: u64,
     pub dht_packets: u64,
+    pub dht_queries: u64,
+    pub verified_nodes: usize,
+    pub active_fetches: usize,
+    pub queued_hashes: usize,
+}
+
+/// Thread-safe, live metrics shared with API/frontends without holding the
+/// crawler's network loop or disk writer lock.
+#[derive(Default)]
+pub struct CrawlerMetrics {
+    sightings: AtomicU64,
+    fetched: AtomicU64,
+    failures: AtomicU64,
+    inserted: AtomicU64,
+    duplicates: AtomicU64,
+    written: AtomicU64,
+    dht_packets: AtomicU64,
+    dht_queries: AtomicU64,
+    verified_nodes: AtomicU64,
+    active_fetches: AtomicU64,
+    queued_hashes: AtomicU64,
+}
+impl CrawlerMetrics {
+    pub fn snapshot(&self) -> CrawlReport {
+        let read = |n: &AtomicU64| n.load(Ordering::Relaxed);
+        CrawlReport {
+            sightings: read(&self.sightings),
+            metadata_fetched: read(&self.fetched),
+            fetch_failures: read(&self.failures),
+            records_inserted: read(&self.inserted),
+            duplicates_skipped: read(&self.duplicates),
+            bytes_written: read(&self.written),
+            dht_packets: read(&self.dht_packets),
+            dht_queries: read(&self.dht_queries),
+            verified_nodes: read(&self.verified_nodes) as usize,
+            active_fetches: read(&self.active_fetches) as usize,
+            queued_hashes: read(&self.queued_hashes) as usize,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -136,6 +177,7 @@ fn writer(
     config: CrawlerConfig,
     mut rx: mpsc::Receiver<Command>,
     ready: oneshot::Sender<Result<(), String>>,
+    metrics: Arc<CrawlerMetrics>,
 ) -> Result<WriterTotals, StoreError> {
     let mut store = match Store::open(&config.store_path, config.store) {
         Ok(store) => store,
@@ -174,6 +216,15 @@ fn writer(
                 totals.inserted += result.inserted as u64;
                 totals.duplicates += result.skipped_duplicates as u64;
                 totals.written += result.bytes_written;
+                metrics
+                    .inserted
+                    .fetch_add(result.inserted as u64, Ordering::Relaxed);
+                metrics
+                    .duplicates
+                    .fetch_add(result.skipped_duplicates as u64, Ordering::Relaxed);
+                metrics
+                    .written
+                    .fetch_add(result.bytes_written, Ordering::Relaxed);
                 since_checkpoint += result.inserted;
                 if config.checkpoint_every > 0 && since_checkpoint >= config.checkpoint_every {
                     store.checkpoint()?;
@@ -307,15 +358,23 @@ impl Crawler {
 
     /// Run until the shutdown sender changes to true or drops.
     /// Network integration tests are separate from codec unit tests.
-    pub async fn run(
+    pub async fn run(self, shutdown: watch::Receiver<bool>) -> Result<CrawlReport, CrawlerError> {
+        self.run_with_metrics(shutdown, Arc::new(CrawlerMetrics::default()))
+            .await
+    }
+
+    pub async fn run_with_metrics(
         self,
         mut shutdown: watch::Receiver<bool>,
+        metrics: Arc<CrawlerMetrics>,
     ) -> Result<CrawlReport, CrawlerError> {
         let (storage_tx, storage_rx) = mpsc::channel(4_096);
         let (ready_tx, ready_rx) = oneshot::channel();
         let writer_cfg = self.config.clone();
-        let writer_handle =
-            tokio::task::spawn_blocking(move || writer(writer_cfg, storage_rx, ready_tx));
+        let writer_metrics = metrics.clone();
+        let writer_handle = tokio::task::spawn_blocking(move || {
+            writer(writer_cfg, storage_rx, ready_tx, writer_metrics)
+        });
         match ready_rx.await {
             Ok(Ok(())) => {}
             Ok(Err(reason)) => return Err(CrawlerError::Worker(reason)),
@@ -346,6 +405,7 @@ impl Crawler {
                 }
                 Some(observation) = sightings.recv() => {
                     report.sightings += 1;
+                    metrics.sightings.fetch_add(1, Ordering::Relaxed);
                     let hash = observation.infohash;
                     if recent.get(&hash).is_some_and(|seen: &Instant| seen.elapsed() < Duration::from_secs(12*3600)) {
                         continue;
@@ -363,6 +423,12 @@ impl Crawler {
                     }
                 }
                 _ = pulse.tick() => {
+                    let dht = node.stats();
+                    metrics.dht_packets.store(dht.packets_received, Ordering::Relaxed);
+                    metrics.dht_queries.store(dht.queries_sent, Ordering::Relaxed);
+                    metrics.verified_nodes.store(dht.verified_nodes as u64, Ordering::Relaxed);
+                    metrics.active_fetches.store(fetches.len() as u64, Ordering::Relaxed);
+                    metrics.queued_hashes.store(pending.len() as u64, Ordering::Relaxed);
                     if fetches.len() >= self.config.max_active_fetches { continue; }
                     let limit = pending.len().min(32);
                     for _ in 0..limit {
@@ -400,6 +466,7 @@ impl Crawler {
                             jobs.remove(&hash);
                             recent.insert(hash, Instant::now());
                             report.metadata_fetched += 1;
+                            metrics.fetched.fetch_add(1, Ordering::Relaxed);
                         }
                         Ok(FetchResult::Existing(hash)) => {
                             active.remove(&hash);
@@ -409,6 +476,7 @@ impl Crawler {
                         Ok(FetchResult::Failed(hash)) => {
                             active.remove(&hash);
                             report.fetch_failures += 1;
+                            metrics.failures.fetch_add(1, Ordering::Relaxed);
                             if let Some(job) = jobs.get_mut(&hash) {
                                 job.attempts += 1;
                                 if job.attempts >= self.config.max_fetch_attempts {
@@ -441,7 +509,24 @@ impl Crawler {
         report.records_inserted = totals.inserted;
         report.duplicates_skipped = totals.duplicates;
         report.bytes_written = totals.written;
-        report.dht_packets = node.stats().packets_received;
+        let dht = node.stats();
+        metrics
+            .dht_packets
+            .store(dht.packets_received, Ordering::Relaxed);
+        metrics
+            .dht_queries
+            .store(dht.queries_sent, Ordering::Relaxed);
+        metrics
+            .verified_nodes
+            .store(dht.verified_nodes as u64, Ordering::Relaxed);
+        metrics.active_fetches.store(0, Ordering::Relaxed);
+        metrics.queued_hashes.store(0, Ordering::Relaxed);
+        report.dht_packets = dht.packets_received;
+        report.dht_queries = dht.queries_sent;
+        report.verified_nodes = dht.verified_nodes;
+        report.records_inserted = metrics.inserted.load(Ordering::Relaxed);
+        report.duplicates_skipped = metrics.duplicates.load(Ordering::Relaxed);
+        report.bytes_written = metrics.written.load(Ordering::Relaxed);
         Ok(report)
     }
 }

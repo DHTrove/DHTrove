@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/dhtrove-storage", "crates/dhtrove-bench", "crates/dhtrove-store", "crates/dhtrove-dht", "crates/dhtrove-metadata", "crates/dhtrove-crawler"]
+members = ["crates/dhtrove-storage", "crates/dhtrove-bench", "crates/dhtrove-store", "crates/dhtrove-dht", "crates/dhtrove-metadata", "crates/dhtrove-crawler", "crates/dhtrove-server"]
 resolver = "2"
 
 [workspace.package]

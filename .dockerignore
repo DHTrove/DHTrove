@@ -1,0 +1,10 @@
+target/
+.git/
+.gitignore
+.github/
+**/node_modules/
+**/*.log
+dhtrove-data/
+*.db
+*.dhs
+*.zst
