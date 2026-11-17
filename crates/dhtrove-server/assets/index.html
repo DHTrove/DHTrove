@@ -13,11 +13,17 @@
   <nav aria-label="Primary navigation">
     <button class="nav-item active" data-view="overview"><span class="nav-icon">◫</span> Overview</button>
     <button class="nav-item" data-view="settings"><span class="nav-icon">⚙</span> Settings</button>
+    <button class="nav-item hidden" data-view="users" id="users-nav"><span class="nav-icon">♙</span> Users</button>
   </nav>
   <div class="side-footer">
     <div class="mini-label">ENGINE</div>
     <div class="engine-state"><i id="side-light" class="dot"></i><span id="side-state">Stopped</span></div>
     <small id="version">DHTrove</small>
+    <div class="side-account hidden" id="side-account">
+      <div class="account-name" id="account-name"></div>
+      <div class="account-role" id="account-role"></div>
+      <button id="logout" class="logout-btn" type="button">Sign out</button>
+    </div>
   </div>
 </aside>
 <main class="main">
@@ -76,15 +82,31 @@
     <div class="form-bottom"><span id="form-help">The crawler must be stopped before changing settings.</span><button id="save" type="submit" class="btn primary">Save settings</button></div>
   </form>
 </section>
+<section id="users" class="view hidden">
+  <div class="heading"><div><div class="eyebrow">ADMINISTRATION / ACCOUNTS</div><h1>Users</h1><p>Manage access to your DHTrove instance.</p></div></div>
+  <div class="form-section user-settings">
+    <div><h3>Allow new registrations</h3><p>When enabled, additional people can create standard accounts. Only the first account is an administrator.</p></div>
+    <label class="toggle"><input id="registration-enabled" type="checkbox"><span class="toggle-track"></span><span id="registration-label">Enabled</span></label>
+  </div>
+  <div class="form-section"><h3>Accounts</h3><div id="users-list" class="users-list"><p class="placeholder">Loading accounts…</p></div></div>
+</section>
 </main>
 </div>
 <div id="auth" class="auth-overlay">
   <form id="auth-form" class="auth-dialog">
-    <div class="brand-mark">D</div><div class="eyebrow">SECURE ACCESS</div><h2>Connect to DHTrove</h2>
-    <p>Enter the dashboard API token. It is retained only in this browser tab.</p>
-    <label for="token">API token</label><input id="token" type="password" spellcheck="false" autocomplete="off" placeholder="Paste your API token" required>
-    <p class="token-hint">Docker: <code>docker exec dhtrove cat /data/admin.token</code></p>
-    <div id="auth-error" class="auth-error" role="alert"></div><button class="btn primary wide" type="submit">Connect</button>
+    <div class="brand-mark">D</div><div class="eyebrow" id="auth-eyebrow">ACCOUNT ACCESS</div>
+    <h2 id="auth-title">Sign in to DHTrove</h2>
+    <p id="auth-description">Enter your username and password to continue.</p>
+    <label for="auth-username">Username</label>
+    <input id="auth-username" name="username" type="text" minlength="3" maxlength="32" pattern="[A-Za-z0-9_.-]{3,32}" autocapitalize="none" autocomplete="username" spellcheck="false" required placeholder="Your username">
+    <label for="auth-password">Password</label>
+    <input id="auth-password" name="password" type="password" minlength="12" maxlength="128" autocomplete="current-password" required placeholder="Your password">
+    <div id="confirm-row" class="hidden"><label for="auth-confirm">Confirm password</label>
+      <input id="auth-confirm" type="password" minlength="12" maxlength="128" autocomplete="new-password" placeholder="Repeat your password">
+    </div>
+    <div id="auth-error" class="auth-error" role="alert"></div>
+    <button id="auth-submit" class="btn primary wide" type="submit">Sign in</button>
+    <button id="auth-switch" type="button" class="auth-switch">Don't have an account? Create one</button>
   </form>
 </div>
 <div id="toast" class="toast hidden" role="status"></div>

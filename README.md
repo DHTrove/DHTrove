@@ -36,7 +36,7 @@ searchability. This is **not** a fork of bitmagnet.
 - `crates/dhtrove-dht` — async UDP node and iterative DHT discovery.
 - `crates/dhtrove-metadata` — metadata-only TCP peer exchange and parsing.
 - `crates/dhtrove-crawler` — bounded scheduling and persistent ingestion.
-- `crates/dhtrove-server` — headless service, HTTP API and web dashboard.
+- `crates/dhtrove-server` — headless service, account database, HTTP API and web dashboard.
 - `docs/storage-format.md` — block codec prototype.
 - `docs/persistence.md` — disk format, API, recovery and limitations.
 - `docs/checkpoints.md` — index checkpoint format, replay and quota behavior.
@@ -51,11 +51,14 @@ searchability. This is **not** a fork of bitmagnet.
 Use the included Compose file to run a local web dashboard:
 
     docker compose up -d
-    docker exec dhtrove cat /data/admin.token
 
-Open http://localhost:8080, enter the token, and press **Start crawler**
-when indexing is needed. The crawler is **stopped by default**, including
-after container restarts. The panel stays available after you stop it.
+Open http://localhost:8080. On the first visit, **create an account**:
+the first registered user automatically becomes administrator. Log in with
+your username and password. No API token is needed.
+
+The crawler is **stopped by default**, including after container restarts.
+Only administrators can start/stop discovery or change settings. An
+administrator can disable further registrations on the Users page.
 
 Full documentation: [Deployment and operation](docs/deployment.md).
 
